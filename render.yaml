@@ -5,9 +5,9 @@ services:
     buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
     envVars:
-      - key: sk_94b2f859b4e28f30ef76f1eb36231fe0d1c477cc2e60c607
+      - key: ELEVEN_API_KEY
         sync: false
-      - key: bGFycnlicmFnZXJAZ21haWwuY29t:iSsWa1dpO-XjTn4Wd71d6
+      - key: DID_API_KEY
         sync: false
       - key: ALLOWED_ORIGIN
         value: "*"

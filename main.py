@@ -125,7 +125,8 @@ async def sadtalker_create(image_url: str, audio_url: str) -> str:
             "preprocess": "full",
             "still_mode": True,
             "enhancer": "gfpgan",
-        },
+        }
+    },
         "model": SADTALKER_MODEL,
     }
     async with httpx.AsyncClient(timeout=600) as client:

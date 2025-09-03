@@ -1,10 +1,10 @@
 """
 Minimal FastAPI backend (cleaned) for Talking Pet MVP
-- ElevenLabs TTS → Supabase upload → D‑ID (image + audio) → video_url
+- ElevenLabs TTS → Supabase upload → SadTalker (via Replicate) → video_url
 - Keeps one debug helper: /debug/head to inspect public file headers
 """
 
-import os, base64, time, uuid
+import os, time, uuid
 from typing import Tuple
 
 import httpx
@@ -14,22 +14,26 @@ from pydantic import BaseModel
 
 # ===== Environment =====
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY", "")
-DID_KEY = os.getenv("DID_API_KEY", "")  # if D‑ID provides key+secret, store as "key:secret"
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")  # e.g. https://<project>.supabase.co
 SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE", "")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "pets")
 
-# TTS tuning (kept small for D‑ID’s 10MB limit)
-TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")  # e.g., mp3_44100_32 for smaller files
+# Replicate / SadTalker
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
+SADTALKER_MODEL = os.getenv("SADTALKER_MODEL", "cjwbw/sadtalker")
+SADTALKER_VERSION = os.getenv("SADTALKER_VERSION", "")  # use the specific version hash from Replicate
+
+# TTS tuning
+TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
 TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "600"))
 
-PUBLIC_BASE = f"{SUPABASE_URL}/storage/v1/object/public"          # GET
-UPLOAD_BASE = f"{SUPABASE_URL}/storage/v1/object"                  # POST (upload)
+PUBLIC_BASE = f"{SUPABASE_URL}/storage/v1/object/public"
+UPLOAD_BASE = f"{SUPABASE_URL}/storage/v1/object"
 
 # ===== App =====
-app = FastAPI(title="Talking Pet Backend (Clean)")
+app = FastAPI(title="Talking Pet Backend (SadTalker)")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[ALLOWED_ORIGIN] if ALLOWED_ORIGIN != "*" else ["*"],
@@ -88,7 +92,6 @@ async def supabase_upload(file_bytes: bytes, object_path: str, content_type: str
         r = await client.post(upload_url, headers=headers, content=file_bytes, params={"upsert": "true"})
         if r.status_code >= 400:
             raise HTTPException(r.status_code, f"Supabase upload failed: {r.text}")
-    # Public URL; add ?download=1 to force direct file body
     return f"{PUBLIC_BASE}/{SUPABASE_BUCKET}/{object_path}?download=1"
 
 async def head_info(url: str) -> Tuple[int, str, int]:
@@ -99,53 +102,54 @@ async def head_info(url: str) -> Tuple[int, str, int]:
         size = int(r.headers.get("content-length", "0"))
         return r.status_code, r.headers.get("content-type", ""), size
 
-async def did_create_talk(image_url: str, audio_url: str) -> str:
-    if not DID_KEY:
-        raise HTTPException(500, "DID_API_KEY not set")
+async def sadtalker_create(image_url: str, audio_url: str) -> str:
+    if not (REPLICATE_API_TOKEN and SADTALKER_MODEL and SADTALKER_VERSION):
+        raise HTTPException(500, "SadTalker env not set (REPLICATE_API_TOKEN, SADTALKER_MODEL, SADTALKER_VERSION)")
 
-    # Preflight: verify D‑ID‑friendly headers & sizes
     a_status, a_type, a_size = await head_info(audio_url)
     i_status, i_type, i_size = await head_info(image_url)
-    if a_size and a_size > 9_500_000:
-        raise HTTPException(400, f"Audio too large: {a_size} bytes (>9.5MB)")
-    if i_size and i_size > 9_500_000:
-        raise HTTPException(400, f"Image too large: {i_size} bytes (>9.5MB)")
     if a_type and "audio" not in a_type:
         raise HTTPException(400, f"audio_url content-type '{a_type}' is not audio/*")
     if i_type and "image" not in i_type:
         raise HTTPException(400, f"image_url content-type '{i_type}' is not image/*")
 
-    auth = base64.b64encode(DID_KEY.encode()).decode()
+    headers = {
+        "Authorization": f"Token {REPLICATE_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "version": SADTALKER_VERSION,
+        "input": {
+            "source_image": image_url,
+            "driven_audio": audio_url,
+            "preprocess": "full",
+            "still_mode": True,
+            "enhancer": "gfpgan",
+        },
+        "model": SADTALKER_MODEL,
+    }
     async with httpx.AsyncClient(timeout=600) as client:
-        create = await client.post(
-            "https://api.d-id.com/talks",
-            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
-            json={
-                "source_url": image_url,
-                "script": {
-                    "type": "audio",
-                    "audio_url": audio_url
-                }
-            },
-        )
+        create = await client.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
         if create.status_code >= 400:
-            raise HTTPException(create.status_code, create.text)
-        talk_id = create.json().get("id")
-        if not talk_id:
-            raise HTTPException(500, "No talk id returned from D‑ID")
-
-        # Poll
+            raise HTTPException(create.status_code, f"Replicate create failed: {create.text}")
+        pred = create.json()
+        pred_id = pred.get("id")
+        if not pred_id:
+            raise HTTPException(500, "Replicate did not return a prediction id")
         while True:
-            g = await client.get(
-                f"https://api.d-id.com/talks/{talk_id}",
-                headers={"Authorization": f"Basic {auth}"},
-            )
-            g.raise_for_status()
-            data = g.json()
-            if data.get("status") == "done":
-                return data.get("result_url")
-            if data.get("status") == "error":
-                raise HTTPException(400, data.get("error", "D-ID error"))
+            getr = await client.get(f"https://api.replicate.com/v1/predictions/{pred_id}", headers=headers)
+            getr.raise_for_status()
+            data = getr.json()
+            status = data.get("status")
+            if status in ("succeeded", "failed", "canceled"):
+                if status != "succeeded":
+                    raise HTTPException(400, f"SadTalker {status}: {data.get('error')}")
+                output = data.get("output")
+                if isinstance(output, list) and output:
+                    return output[-1]
+                elif isinstance(output, str):
+                    return output
+                raise HTTPException(500, "SadTalker succeeded but no output URL returned")
             time.sleep(2)
 
 # ===== Routes =====
@@ -153,48 +157,21 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
 async def health():
     return {"ok": True}
 
-@app.post("/jobs")
-async def create_job_with_audio(req: JobWithAudioURL):
-    video_url = await did_create_talk(req.image_url, req.audio_url)
+@app.post("/jobs_st")
+async def create_job_with_audio_sadtalker(req: JobWithAudioURL):
+    video_url = await sadtalker_create(req.image_url, req.audio_url)
     return {"video_url": video_url}
 
-@app.post("/jobs_tts")
-async def create_job_with_tts(req: JobWithText):
-    # 1) TTS → bytes
+@app.post("/jobs_tts_st")
+async def create_job_with_tts_sadtalker(req: JobWithText):
     mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
-    # 2) Upload MP3 → public URL (forced download)
     key = f"audio/{uuid.uuid4()}.mp3"
     audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
-    # 3) D‑ID create talk
-    video_url = await did_create_talk(req.image_url, audio_public_url)
+    video_url = await sadtalker_create(req.image_url, audio_public_url)
     return {"audio_url": audio_public_url, "video_url": video_url}
 
-# ===== Minimal debug kept for testing =====
+# ===== Debug =====
 @app.post("/debug/head")
 async def debug_head(req: HeadRequest):
     status, ctype, size = await head_info(req.url)
     return {"status": status, "content_type": ctype, "bytes": size}
-# Simple connectivity test to D-ID that avoids audio. It uses a text script.
-class DIDTextRequest(BaseModel):
-    image_url: str
-    text: str = "Hello from Talking Pet debug"
-
-@app.post("/debug/did_text")
-async def debug_did_text(req: DIDTextRequest):
-    if not DID_KEY:
-        raise HTTPException(500, "DID_API_KEY not set")
-    # Minimal /talks request using TEXT script to isolate D-ID auth/connectivity.
-    auth = base64.b64encode(DID_KEY.encode()).decode()
-    payload = {
-        "source_url": req.image_url,
-        "script": {"type": "text", "input": req.text}
-    }
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(
-            "https://api.d-id.com/talks",
-            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
-            json=payload,
-        )
-        # Return raw body so we can see exactly what D-ID says
-        return {"status": r.status_code, "body": r.text}
-

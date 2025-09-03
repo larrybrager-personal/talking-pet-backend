@@ -1,7 +1,7 @@
 """
-Minimal FastAPI backend (cleaned) for Talking Pet MVP
+Minimal FastAPI backend for Talking Pet MVP
 - ElevenLabs TTS → Supabase upload → SadTalker (via Replicate) → video_url
-- Keeps one debug helper: /debug/head to inspect public file headers
+- Debug helper: /debug/head to inspect public file headers
 """
 
 import os, time, uuid
@@ -16,16 +16,15 @@ from pydantic import BaseModel
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY", "")
 ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "*")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")  # e.g. https://<project>.supabase.co
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE", "")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "pets")
 
 # Replicate / SadTalker
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
-SADTALKER_MODEL = os.getenv("SADTALKER_MODEL", "cjwbw/sadtalker")
-SADTALKER_VERSION = os.getenv("SADTALKER_VERSION", "")  # use the specific version hash from Replicate
+SADTALKER_VERSION = os.getenv("SADTALKER_VERSION", "")  # version hash from Replicate
 
-# TTS tuning
+# TTS settings
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
 TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "600"))
 
@@ -60,7 +59,7 @@ async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
     if not ELEVEN_API_KEY:
         raise HTTPException(500, "ELEVEN_API_KEY not set")
     if len(text) > TTS_MAX_CHARS:
-        raise HTTPException(400, f"Text too long for demo (max {TTS_MAX_CHARS} chars). Please shorten your script.")
+        raise HTTPException(400, f"Text too long (max {TTS_MAX_CHARS} chars).")
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     async with httpx.AsyncClient(timeout=120) as client:
@@ -76,7 +75,7 @@ async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
         r.raise_for_status()
         audio = r.content
         if len(audio) > 9_500_000:
-            raise HTTPException(400, "Generated audio is too large (>9.5MB). Shorten the script or reduce bitrate.")
+            raise HTTPException(400, "Generated audio too large (>9.5MB).")
         return audio
 
 async def supabase_upload(file_bytes: bytes, object_path: str, content_type: str) -> str:
@@ -103,8 +102,8 @@ async def head_info(url: str) -> Tuple[int, str, int]:
         return r.status_code, r.headers.get("content-type", ""), size
 
 async def sadtalker_create(image_url: str, audio_url: str) -> str:
-    if not (REPLICATE_API_TOKEN and SADTALKER_MODEL and SADTALKER_VERSION):
-        raise HTTPException(500, "SadTalker env not set (REPLICATE_API_TOKEN, SADTALKER_MODEL, SADTALKER_VERSION)")
+    if not (REPLICATE_API_TOKEN and SADTALKER_VERSION):
+        raise HTTPException(500, "SadTalker env not set")
 
     a_status, a_type, a_size = await head_info(audio_url)
     i_status, i_type, i_size = await head_info(image_url)
@@ -114,20 +113,19 @@ async def sadtalker_create(image_url: str, audio_url: str) -> str:
         raise HTTPException(400, f"image_url content-type '{i_type}' is not image/*")
 
     headers = {
-    "Authorization": f"Token {REPLICATE_API_TOKEN}",
-    "Content-Type": "application/json",
-}
-
-payload = {
-    "version": SADTALKER_VERSION,   # the long version hash from Replicate
-    "input": {
-        "source_image": image_url,
-        "driven_audio": audio_url,
-        "preprocess": "full",
-        "still_mode": True,
-        "enhancer": "gfpgan",
+        "Authorization": f"Token {REPLICATE_API_TOKEN}",
+        "Content-Type": "application/json",
     }
-}
+    payload = {
+        "version": SADTALKER_VERSION,
+        "input": {
+            "source_image": image_url,
+            "driven_audio": audio_url,
+            "preprocess": "full",
+            "still_mode": True,
+            "enhancer": "gfpgan",
+        },
+    }
 
     async with httpx.AsyncClient(timeout=600) as client:
         create = await client.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
@@ -137,6 +135,8 @@ payload = {
         pred_id = pred.get("id")
         if not pred_id:
             raise HTTPException(500, "Replicate did not return a prediction id")
+
+        # Poll until completion
         while True:
             getr = await client.get(f"https://api.replicate.com/v1/predictions/{pred_id}", headers=headers)
             getr.raise_for_status()
@@ -150,7 +150,7 @@ payload = {
                     return output[-1]
                 elif isinstance(output, str):
                     return output
-                raise HTTPException(500, "SadTalker succeeded but no output URL returned")
+                raise HTTPException(500, "SadTalker succeeded but no output URL")
             time.sleep(2)
 
 # ===== Routes =====

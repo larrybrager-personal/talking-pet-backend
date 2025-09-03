@@ -164,7 +164,17 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
         with open(apath, "wb") as f: f.write(ar.content)
 
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    cmd = [ffmpeg_path, "-y", "-i", vpath, "-i", apath, "-c:v", "copy", "-c:a", "aac", "-shortest", fpath]
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i", vpath,
+        "-i", apath,
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-af", "adelay=500|500",  # add 0.5s delay to audio start
+        "-shortest",
+        fpath
+    ]
     subprocess.run(cmd, check=True)
 
     final_bytes = open(fpath, "rb").read()
@@ -199,4 +209,3 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
 async def debug_head(req: HeadRequest):
     status, ctype, size = await head_info(req.url)
     return {"status": status, "content_type": ctype, "bytes": size}
-

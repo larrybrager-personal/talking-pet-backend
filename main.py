@@ -92,7 +92,6 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=30) as head_client:
             head = await head_client.head(audio_url)
-            # Some storages don't support HEAD; fallback to GET (streaming only headers)
             if head.status_code >= 400:
                 head = await head_client.get(audio_url, headers={"Range": "bytes=0-1"})
             size = int(head.headers.get("content-length", "0"))
@@ -100,7 +99,6 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
             if size and size > 9_500_000:
                 raise HTTPException(400, f"Audio too large for D-ID: {size} bytes (>9.5MB). Shorten script or reduce bitrate.")
             if "audio" not in ctype:
-                # Warn early if the URL isn't serving audio
                 raise HTTPException(400, f"audio_url content-type is '{ctype}', expected 'audio/*'. Check your Supabase URL.")
     except HTTPException:
         raise

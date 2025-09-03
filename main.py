@@ -85,7 +85,7 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
             headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
             json={
                 "source_url": image_url,
-                "audio_url": audio_url,
+                "script": {"type": "audio", "audio_url": audio_url},
                 "config": {"resolution": "720p"}
             },
         )
@@ -161,4 +161,3 @@ async def create_job_with_tts(req: JobWithText):
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

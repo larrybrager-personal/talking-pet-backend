@@ -4,10 +4,11 @@ Minimal FastAPI backend (cleaned) for Talking Pet MVP
 - Keeps one debug helper: /debug/head to inspect public file headers
 """
 
-import os, time, uuid
+import os, time, uuid, tempfile, shutil, subprocess
 from typing import Tuple
 
 import httpx
+import imageio_ffmpeg
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -112,7 +113,6 @@ async def hailuo_video_from_prompt(image_url: str, prompt: str, seconds: int, re
 
     headers = {"Authorization": f"Token {REPLICATE_API_TOKEN}", "Content-Type": "application/json"}
     payload = {
-        "model": HAILUO_MODEL,
         "input": {
             "prompt": prompt,
             "duration": seconds,
@@ -122,8 +122,10 @@ async def hailuo_video_from_prompt(image_url: str, prompt: str, seconds: int, re
         }
     }
 
+    create_url = "https://api.replicate.com/v1/models/minimax/hailuo-02/predictions"
+
     async with httpx.AsyncClient(timeout=600) as client:
-        create = await client.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
+        create = await client.post(create_url, headers=headers, json=payload)
         if create.status_code >= 400:
             raise HTTPException(create.status_code, f"Replicate Hailuo create failed: {create.text}")
         pred = create.json()
@@ -147,6 +149,28 @@ async def hailuo_video_from_prompt(image_url: str, prompt: str, seconds: int, re
                 raise HTTPException(500, "Hailuo succeeded but no output URL")
             time.sleep(2)
 
+async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
+    tmpdir = tempfile.mkdtemp()
+    vpath = os.path.join(tmpdir, "in.mp4")
+    apath = os.path.join(tmpdir, "in.mp3")
+    fpath = os.path.join(tmpdir, "out.mp4")
+
+    async with httpx.AsyncClient() as client:
+        vr = await client.get(video_url)
+        vr.raise_for_status()
+        with open(vpath, "wb") as f: f.write(vr.content)
+        ar = await client.get(audio_url)
+        ar.raise_for_status()
+        with open(apath, "wb") as f: f.write(ar.content)
+
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [ffmpeg_path, "-y", "-i", vpath, "-i", apath, "-c:v", "copy", "-c:a", "aac", "-shortest", fpath]
+    subprocess.run(cmd, check=True)
+
+    final_bytes = open(fpath, "rb").read()
+    shutil.rmtree(tmpdir)
+    return final_bytes
+
 # ===== Routes =====
 @app.get("/health")
 async def health():
@@ -164,28 +188,9 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
     audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
     video_url = await hailuo_video_from_prompt(req.image_url, req.prompt, req.seconds, req.resolution)
 
-    # mux audio + video
-    import subprocess, tempfile, shutil
-    tmpdir = tempfile.mkdtemp()
-    vpath = os.path.join(tmpdir, "in.mp4")
-    apath = os.path.join(tmpdir, "in.mp3")
-    fpath = os.path.join(tmpdir, "out.mp4")
-
-    async with httpx.AsyncClient() as client:
-        vr = await client.get(video_url)
-        vr.raise_for_status()
-        with open(vpath, "wb") as f: f.write(vr.content)
-        ar = await client.get(audio_public_url)
-        ar.raise_for_status()
-        with open(apath, "wb") as f: f.write(ar.content)
-
-    cmd = ["ffmpeg", "-y", "-i", vpath, "-i", apath, "-c:v", "copy", "-c:a", "aac", "-shortest", fpath]
-    subprocess.run(cmd, check=True)
-
-    final_bytes = open(fpath, "rb").read()
+    final_bytes = await mux_video_audio(video_url, audio_public_url)
     final_key = f"videos/{uuid.uuid4()}.mp4"
     final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
-    shutil.rmtree(tmpdir)
 
     return {"audio_url": audio_public_url, "video_url": video_url, "final_url": final_url}
 
@@ -194,3 +199,4 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
 async def debug_head(req: HeadRequest):
     status, ctype, size = await head_info(req.url)
     return {"status": status, "content_type": ctype, "bytes": size}
+

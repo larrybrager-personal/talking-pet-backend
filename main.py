@@ -114,21 +114,21 @@ async def sadtalker_create(image_url: str, audio_url: str) -> str:
         raise HTTPException(400, f"image_url content-type '{i_type}' is not image/*")
 
     headers = {
-        "Authorization": f"Token {REPLICATE_API_TOKEN}",
-        "Content-Type": "application/json",
+    "Authorization": f"Token {REPLICATE_API_TOKEN}",
+    "Content-Type": "application/json",
+}
+
+payload = {
+    "version": SADTALKER_VERSION,   # the long version hash from Replicate
+    "input": {
+        "source_image": image_url,
+        "driven_audio": audio_url,
+        "preprocess": "full",
+        "still_mode": True,
+        "enhancer": "gfpgan",
     }
-    payload = {
-        "version": SADTALKER_VERSION,
-        "input": {
-            "source_image": image_url,
-            "driven_audio": audio_url,
-            "preprocess": "full",
-            "still_mode": True,
-            "enhancer": "gfpgan",
-        }
-    },
-        "model": SADTALKER_MODEL,
-    }
+}
+
     async with httpx.AsyncClient(timeout=600) as client:
         create = await client.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
         if create.status_code >= 400:

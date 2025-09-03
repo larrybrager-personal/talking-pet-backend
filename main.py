@@ -88,6 +88,55 @@ async def supabase_upload(file_bytes: bytes, object_path: str, content_type: str
 async def did_create_talk(image_url: str, audio_url: str) -> str:
     if not DID_KEY:
         raise HTTPException(500, "DID_API_KEY not set")
+    # Preflight: confirm the audio URL is reachable and < 10MB
+    try:
+        async with httpx.AsyncClient(timeout=30) as head_client:
+            head = await head_client.head(audio_url)
+            # Some storages don't support HEAD; fallback to GET (streaming only headers)
+            if head.status_code >= 400:
+                head = await head_client.get(audio_url, headers={"Range": "bytes=0-1"})
+            size = int(head.headers.get("content-length", "0"))
+            ctype = head.headers.get("content-type", "")
+            if size and size > 9_500_000:
+                raise HTTPException(400, f"Audio too large for D-ID: {size} bytes (>9.5MB). Shorten script or reduce bitrate.")
+            if "audio" not in ctype:
+                # Warn early if the URL isn't serving audio
+                raise HTTPException(400, f"audio_url content-type is '{ctype}', expected 'audio/*'. Check your Supabase URL.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"audio_url preflight failed: {str(e)}")
+
+    auth = base64.b64encode(DID_KEY.encode()).decode()
+    async with httpx.AsyncClient(timeout=600) as client:
+        create = await client.post(
+            "https://api.d-id.com/talks",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json={
+                "source_url": image_url,
+                "script": {"type": "audio", "audio_url": audio_url},
+                "config": {"resolution": "720p"}
+            },
+        )
+        if create.status_code >= 400:
+            raise HTTPException(create.status_code, create.text)
+        talk_id = create.json().get("id")
+        if not talk_id:
+            raise HTTPException(500, "No talk id returned")
+        while True:
+            g = await client.get(
+                f"https://api.d-id.com/talks/{talk_id}",
+                headers={"Authorization": f"Basic {auth}"},
+            )
+            g.raise_for_status()
+            data = g.json()
+            if data.get("status") == "done":
+                return data.get("result_url")
+            if data.get("status") == "error":
+                raise HTTPException(400, data.get("error", "D-ID error"))
+            time.sleep(2) -> str:
+    if not DID_KEY:
+        raise HTTPException(500, "DID_API_KEY not set")
     auth = base64.b64encode(DID_KEY.encode()).decode()
     async with httpx.AsyncClient(timeout=600) as client:
         create = await client.post(
@@ -147,6 +196,12 @@ async def debug_voices():
         data = r.json()
         voices = [{"name": v.get("name"), "voice_id": v.get("voice_id")} for v in data.get("voices", [])]
         return {"voices": voices}
+
+@app.post("/debug/tts_size")
+async def debug_tts_size(req: TTSRequest):
+    """Returns size (bytes) of generated MP3 without calling D-ID; helps debug 10MB errors."""
+    audio = await elevenlabs_tts_bytes(req.text, req.voice_id)
+    return {"bytes": len(audio)}
 
 @app.post("/jobs")
 async def create_job_with_audio(req: JobWithAudioURL):

@@ -174,3 +174,27 @@ async def create_job_with_tts(req: JobWithText):
 async def debug_head(req: HeadRequest):
     status, ctype, size = await head_info(req.url)
     return {"status": status, "content_type": ctype, "bytes": size}
+# Simple connectivity test to D-ID that avoids audio. It uses a text script.
+class DIDTextRequest(BaseModel):
+    image_url: str
+    text: str = "Hello from Talking Pet debug"
+
+@app.post("/debug/did_text")
+async def debug_did_text(req: DIDTextRequest):
+    if not DID_KEY:
+        raise HTTPException(500, "DID_API_KEY not set")
+    # Minimal /talks request using TEXT script to isolate D-ID auth/connectivity.
+    auth = base64.b64encode(DID_KEY.encode()).decode()
+    payload = {
+        "source_url": req.image_url,
+        "script": {"type": "text", "input": req.text}
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(
+            "https://api.d-id.com/talks",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json=payload,
+        )
+        # Return raw body so we can see exactly what D-ID says
+        return {"status": r.status_code, "body": r.text}
+

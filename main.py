@@ -201,6 +201,23 @@ async def debug_tts_size(req: TTSRequest):
     audio = await elevenlabs_tts_bytes(req.text, req.voice_id)
     return {"bytes": len(audio)}
 
+class TTSUploadRequest(BaseModel):
+    text: str
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+
+@app.post("/debug/tts_upload")
+async def debug_tts_upload(req: TTSUploadRequest):
+    """Generate TTS and upload to Supabase, return the public audio_url and its response headers."""
+    mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
+    key = f"audio/{uuid.uuid4()}.mp3"
+    audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.head(audio_public_url)
+        if r.status_code >= 400:
+            r = await c.get(audio_public_url, headers={"Range": "bytes=0-1"})
+        headers = dict(r.headers)
+    return {"audio_url": audio_public_url, "headers": headers}
+
 @app.post("/jobs")
 async def create_job_with_audio(req: JobWithAudioURL):
     """Use pre-generated audio (audio_url) + image_url to create a D-ID video."""

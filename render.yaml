@@ -1,14 +1,3 @@
-# ---- requirements.txt (create this file at repo root) ----
-# Copy exactly these lines:
-# fastapi web framework
-fastapi
-# ASGI server for FastAPI
-uvicorn[standard]
-# HTTP client for provider calls (ElevenLabs, D-ID, Supabase REST)
-httpx
-# Load env vars in local dev
-python-dotenv
-
 # ---- render.yaml (create this file at repo root) ----
 # Paste into render.yaml and commit. Values are provided in Render dashboard, not here.
 services:

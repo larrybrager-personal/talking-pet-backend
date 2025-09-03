@@ -122,7 +122,10 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
             headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
             json={
                 "source_url": image_url,
-                "script": {"type": "audio", "audio_url": audio_url},  # no explicit resolution; let D‑ID default
+                "script": {
+                    "type": "audio",
+                    "audio_url": audio_url
+                }
             },
         )
         if create.status_code >= 400:

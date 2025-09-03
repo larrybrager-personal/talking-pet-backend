@@ -8,3 +8,4 @@ uvicorn[standard]
 httpx
 # Load env vars in local dev
 python-dotenv
+imageio-ffmpeg==0.4.9

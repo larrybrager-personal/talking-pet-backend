@@ -189,7 +189,7 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
                 return data.get("result_url")
             if data.get("status") == "error":
                 raise HTTPException(400, data.get("error", "D-ID error"))
-            time.sleep(2) -> str:
+            time.sleep(2) 
     if not DID_KEY:
         raise HTTPException(500, "DID_API_KEY not set")
     auth = base64.b64encode(DID_KEY.encode()).decode()

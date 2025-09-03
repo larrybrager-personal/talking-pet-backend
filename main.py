@@ -88,6 +88,63 @@ async def supabase_upload(file_bytes: bytes, object_path: str, content_type: str
 async def did_create_talk(image_url: str, audio_url: str) -> str:
     if not DID_KEY:
         raise HTTPException(500, "DID_API_KEY not set")
+
+    async def head_info(url: str):
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.head(url)
+            if r.status_code >= 400:
+                r = await c.get(url, headers={"Range": "bytes=0-1"})
+            size = int(r.headers.get("content-length", "0"))
+            ctype = r.headers.get("content-type", "")
+            return size, ctype
+
+    # Preflight both assets
+    try:
+        a_size, a_type = await head_info(audio_url)
+        i_size, i_type = await head_info(image_url)
+        if a_size and a_size > 9_500_000:
+            raise HTTPException(400, f"Audio too large for D-ID: {a_size} bytes (>9.5MB). Shorten script or reduce bitrate.")
+        if i_size and i_size > 9_500_000:
+            raise HTTPException(400, f"Image too large for D-ID: {i_size} bytes (>9.5MB). Please upload a smaller image.")
+        if a_type and "audio" not in a_type:
+            raise HTTPException(400, f"audio_url content-type is '{a_type}', expected 'audio/*'. Check your Supabase URL.")
+        if i_type and not ("image" in i_type):
+            raise HTTPException(400, f"image_url content-type is '{i_type}', expected 'image/*'. Check your Supabase URL.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"preflight failed: {str(e)}")
+
+    auth = base64.b64encode(DID_KEY.encode()).decode()
+    async with httpx.AsyncClient(timeout=600) as client:
+        create = await client.post(
+            "https://api.d-id.com/talks",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json={
+                "source_url": image_url,
+                "script": {"type": "audio", "audio_url": audio_url},
+                "config": {"resolution": "720p"}
+            },
+        )
+        if create.status_code >= 400:
+            raise HTTPException(create.status_code, create.text)
+        talk_id = create.json().get("id")
+        if not talk_id:
+            raise HTTPException(500, "No talk id returned")
+        while True:
+            g = await client.get(
+                f"https://api.d-id.com/talks/{talk_id}",
+                headers={"Authorization": f"Basic {auth}"},
+            )
+            g.raise_for_status()
+            data = g.json()
+            if data.get("status") == "done":
+                return data.get("result_url")
+            if data.get("status") == "error":
+                raise HTTPException(400, data.get("error", "D-ID error"))
+            time.sleep(2)
+    if not DID_KEY:
+        raise HTTPException(500, "DID_API_KEY not set")
     # Preflight: confirm the audio URL is reachable and < 10MB
     try:
         async with httpx.AsyncClient(timeout=30) as head_client:
@@ -132,7 +189,7 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
                 return data.get("result_url")
             if data.get("status") == "error":
                 raise HTTPException(400, data.get("error", "D-ID error"))
-            time.sleep(2)
+            time.sleep(2) -> str:
     if not DID_KEY:
         raise HTTPException(500, "DID_API_KEY not set")
     auth = base64.b64encode(DID_KEY.encode()).decode()
@@ -217,6 +274,19 @@ async def debug_tts_upload(req: TTSUploadRequest):
             r = await c.get(audio_public_url, headers={"Range": "bytes=0-1"})
         headers = dict(r.headers)
     return {"audio_url": audio_public_url, "headers": headers}
+
+class HeadRequest(BaseModel):
+    url: str
+
+@app.post("/debug/head")
+async def debug_head(req: HeadRequest):
+    """Return headers and inferred size/content-type for any public URL (image or audio)."""
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.head(req.url)
+        if r.status_code >= 400:
+            r = await c.get(req.url, headers={"Range": "bytes=0-1"})
+        size = int(r.headers.get("content-length", "0"))
+        return {"status": r.status_code, "headers": dict(r.headers), "bytes": size}
 
 @app.post("/jobs")
 async def create_job_with_audio(req: JobWithAudioURL):

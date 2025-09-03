@@ -108,10 +108,35 @@ async def did_create_talk(image_url: str, audio_url: str) -> str:
                 raise HTTPException(500, data.get("error", "D-ID error"))
             time.sleep(2)
 
-# ==== ROUTES ====
+# ==== ROUTES & DEBUG ====
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+@app.get("/debug/env")
+async def debug_env():
+    return {
+        "ELEVEN_API_KEY": bool(ELEVEN_API_KEY),
+        "DID_API_KEY": bool(DID_KEY),
+        "SUPABASE_URL": bool(SUPABASE_URL),
+        "SUPABASE_SERVICE_ROLE": bool(SUPABASE_SERVICE_ROLE),
+        "SUPABASE_BUCKET": SUPABASE_BUCKET,
+    }
+
+@app.get("/debug/voices")
+async def debug_voices():
+    if not ELEVEN_API_KEY:
+        raise HTTPException(500, "ELEVEN_API_KEY not set")
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.get(
+            "https://api.elevenlabs.io/v1/voices",
+            headers={"xi-api-key": ELEVEN_API_KEY},
+        )
+        r.raise_for_status()
+        # return only minimal info
+        data = r.json()
+        voices = [{"name": v.get("name"), "voice_id": v.get("voice_id")} for v in data.get("voices", [])]
+        return {"voices": voices}
 
 @app.post("/jobs")
 async def create_job_with_audio(req: JobWithAudioURL):
@@ -122,11 +147,18 @@ async def create_job_with_audio(req: JobWithAudioURL):
 @app.post("/jobs_tts")
 async def create_job_with_tts(req: JobWithText):
     """End-to-end: TTS via ElevenLabs → upload MP3 to Supabase → D-ID → return MP4 URL."""
-    # 1) TTS → bytes
-    mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
-    # 2) Upload MP3 to Supabase
-    key = f"audio/{uuid.uuid4()}.mp3"
-    audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
-    # 3) Call D-ID with image + audio URLs
-    video_url = await did_create_talk(req.image_url, audio_public_url)
-    return {"audio_url": audio_public_url, "video_url": video_url}
+    try:
+        # 1) TTS → bytes
+        mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
+        # 2) Upload MP3 to Supabase
+        key = f"audio/{uuid.uuid4()}.mp3"
+        audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
+        # 3) Call D-ID with image + audio URLs
+        video_url = await did_create_talk(req.image_url, audio_public_url)
+        return {"audio_url": audio_public_url, "video_url": video_url}
+    except httpx.HTTPStatusError as e:
+        # bubble up provider error details for easier debugging
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

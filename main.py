@@ -44,6 +44,12 @@ class JobWithText(BaseModel):
 async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
     if not ELEVEN_API_KEY:
         raise HTTPException(500, "ELEVEN_API_KEY not set")
+    # Keep audio small for D-ID (10MB max). Use lower bitrate and cap text length.
+    OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")  # smaller than 128kbps
+    MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "600"))  # ~30–45s typical
+    if len(text) > MAX_CHARS:
+        raise HTTPException(400, f"Text too long for demo (max {MAX_CHARS} chars). Please shorten your script.")
+
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
@@ -52,11 +58,15 @@ async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
             json={
                 "text": text,
                 "model_id": "eleven_multilingual_v2",
-                "output_format": "mp3_44100_128",
+                "output_format": OUTPUT_FORMAT,
             },
         )
         r.raise_for_status()
-        return r.content  # MP3 bytes
+        audio = r.content  # MP3 bytes
+        # Guardrail: fail fast if file would exceed D-ID's 10MB limit
+        if len(audio) > 9_500_000:
+            raise HTTPException(400, "Generated audio is too large (>9.5MB). Please shorten the script or reduce bitrate.")
+        return audio  # MP3 bytes
 
 async def supabase_upload(file_bytes: bytes, object_path: str, content_type: str) -> str:
     """Uploads bytes to Supabase Storage using service role; returns PUBLIC URL."""

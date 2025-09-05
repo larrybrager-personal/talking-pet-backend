@@ -51,12 +51,14 @@ class JobPromptOnly(BaseModel):
         prompt: Text prompt describing the desired animation.
         seconds: Duration of the generated video.
         resolution: Target output resolution, defaults to 768p.
+        model: Optional Replicate model identifier. Defaults to Hailuo-02.
     """
 
     image_url: str
     prompt: str
     seconds: int = 6
     resolution: str = "768p"
+    model: str | None = None
 
 
 class JobPromptTTS(BaseModel):
@@ -65,6 +67,15 @@ class JobPromptTTS(BaseModel):
     Extends :class:`JobPromptOnly` with script text and desired ElevenLabs
     voice identifier so the backend can synthesize speech and mux it with the
     generated video.
+
+    Attributes:
+        image_url: Publicly accessible image that provides the first frame.
+        prompt: Text prompt describing the desired animation.
+        text: Script text to synthesize with TTS.
+        voice_id: ElevenLabs voice identifier.
+        seconds: Duration of the generated video.
+        resolution: Target output resolution, defaults to 768p.
+        model: Optional Replicate model identifier. Defaults to Hailuo-02.
     """
 
     image_url: str
@@ -73,6 +84,7 @@ class JobPromptTTS(BaseModel):
     voice_id: str
     seconds: int = 6
     resolution: str = "768p"
+    model: str | None = None
 
 
 class HeadRequest(BaseModel):
@@ -194,12 +206,12 @@ async def replicate_video_from_prompt(
             time.sleep(2)
 
 async def hailuo_video_from_prompt(
-    image_url: str, prompt: str, seconds: int, resolution: str
+    model: str, image_url: str, prompt: str, seconds: int, resolution: str
 ) -> str:
-    """Create a talking-pet style video using the Hailuo-02 model on Replicate."""
+    """Create a talking-pet style video using the specified Replicate model."""
 
     return await replicate_video_from_prompt(
-        HAILUO_MODEL, image_url, prompt, seconds, resolution
+        model, image_url, prompt, seconds, resolution
     )
 
 async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
@@ -245,7 +257,9 @@ async def health():
 @app.post("/jobs_prompt_only")
 async def create_job_with_prompt(req: JobPromptOnly):
     """Generate a video from a static image and text prompt."""
-    video_url = await hailuo_video_from_prompt(req.image_url, req.prompt, req.seconds, req.resolution)
+    video_url = await hailuo_video_from_prompt(
+        req.model or HAILUO_MODEL, req.image_url, req.prompt, req.seconds, req.resolution
+    )
     return {"video_url": video_url}
 
 @app.post("/jobs_prompt_tts")
@@ -261,7 +275,9 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
     mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
     key = f"audio/{uuid.uuid4()}.mp3"
     audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
-    video_url = await hailuo_video_from_prompt(req.image_url, req.prompt, req.seconds, req.resolution)
+    video_url = await hailuo_video_from_prompt(
+        req.model or HAILUO_MODEL, req.image_url, req.prompt, req.seconds, req.resolution
+    )
 
     final_bytes = await mux_video_audio(video_url, audio_public_url)
     final_key = f"videos/{uuid.uuid4()}.mp4"

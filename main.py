@@ -142,8 +142,10 @@ async def head_info(url: str) -> Tuple[int, str, int]:
         size = int(r.headers.get("content-length", "0"))
         return r.status_code, r.headers.get("content-type", ""), size
 
-async def hailuo_video_from_prompt(image_url: str, prompt: str, seconds: int, resolution: str) -> str:
-    """Create a talking-pet style video using the Hailuo-02 model on Replicate."""
+async def replicate_video_from_prompt(
+    model: str, image_url: str, prompt: str, seconds: int, resolution: str
+) -> str:
+    """Create a video using a specified Replicate model."""
 
     if not REPLICATE_API_TOKEN:
         raise HTTPException(500, "Replicate API token not set")
@@ -155,36 +157,50 @@ async def hailuo_video_from_prompt(image_url: str, prompt: str, seconds: int, re
             "duration": seconds,
             "resolution": resolution,
             "prompt_optimizer": False,
-            "first_frame_image": image_url
+            "first_frame_image": image_url,
         }
     }
 
-    create_url = "https://api.replicate.com/v1/models/minimax/hailuo-02/predictions"
+    create_url = f"https://api.replicate.com/v1/models/{model}/predictions"
 
     async with httpx.AsyncClient(timeout=600) as client:
         create = await client.post(create_url, headers=headers, json=payload)
         if create.status_code >= 400:
-            raise HTTPException(create.status_code, f"Replicate Hailuo create failed: {create.text}")
+            raise HTTPException(create.status_code, f"Replicate {model} create failed: {create.text}")
         pred = create.json()
         pred_id = pred.get("id")
         if not pred_id:
-            raise HTTPException(500, "Replicate did not return a prediction id (Hailuo)")
+            raise HTTPException(500, "Replicate did not return a prediction id")
 
         while True:
-            getr = await client.get(f"https://api.replicate.com/v1/predictions/{pred_id}", headers=headers)
+            getr = await client.get(
+                f"https://api.replicate.com/v1/predictions/{pred_id}", headers=headers
+            )
             getr.raise_for_status()
             data = getr.json()
             status = data.get("status")
             if status in ("succeeded", "failed", "canceled"):
                 if status != "succeeded":
-                    raise HTTPException(400, f"Hailuo {status}: {data.get('error')} | logs: {data.get('logs')}")
+                    raise HTTPException(
+                        400,
+                        f"{model} {status}: {data.get('error')} | logs: {data.get('logs')}",
+                    )
                 output = data.get("output")
                 if isinstance(output, list) and output:
                     return output[-1]
                 if isinstance(output, str):
                     return output
-                raise HTTPException(500, "Hailuo succeeded but no output URL")
+                raise HTTPException(500, "Replicate succeeded but no output URL")
             time.sleep(2)
+
+async def hailuo_video_from_prompt(
+    image_url: str, prompt: str, seconds: int, resolution: str
+) -> str:
+    """Create a talking-pet style video using the Hailuo-02 model on Replicate."""
+
+    return await replicate_video_from_prompt(
+        HAILUO_MODEL, image_url, prompt, seconds, resolution
+    )
 
 async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
     """Combine a video and an audio track into a single MP4 file."""

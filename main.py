@@ -44,12 +44,29 @@ app.add_middleware(
 
 # ===== Models =====
 class JobPromptOnly(BaseModel):
+    """Request body for generating a video directly from a prompt.
+
+    Attributes:
+        image_url: Publicly accessible image that provides the first frame.
+        prompt: Text prompt describing the desired animation.
+        seconds: Duration of the generated video.
+        resolution: Target output resolution, defaults to 768p.
+    """
+
     image_url: str
     prompt: str
     seconds: int = 6
     resolution: str = "768p"
 
+
 class JobPromptTTS(BaseModel):
+    """Request body for generating a video and matching audio.
+
+    Extends :class:`JobPromptOnly` with script text and desired ElevenLabs
+    voice identifier so the backend can synthesize speech and mux it with the
+    generated video.
+    """
+
     image_url: str
     prompt: str
     text: str
@@ -57,11 +74,25 @@ class JobPromptTTS(BaseModel):
     seconds: int = 6
     resolution: str = "768p"
 
+
 class HeadRequest(BaseModel):
+    """Request body for the ``/debug/head`` endpoint."""
+
     url: str
 
 # ===== Helpers =====
 async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
+    """Generate speech with ElevenLabs and return it as raw bytes.
+
+    Args:
+        text: Script to synthesize.
+        voice_id: Identifier of the ElevenLabs voice to use.
+
+    Raises:
+        HTTPException: If the API key is missing, the text is too long or the
+            API responds with an error.
+    """
+
     if not ELEVEN_API_KEY:
         raise HTTPException(500, "ELEVEN_API_KEY not set")
     if len(text) > TTS_MAX_CHARS:
@@ -85,6 +116,8 @@ async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
         return audio
 
 async def supabase_upload(file_bytes: bytes, object_path: str, content_type: str) -> str:
+    """Upload a file to Supabase Storage and return a public URL."""
+
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
         raise HTTPException(500, "Supabase env not set")
     upload_url = f"{UPLOAD_BASE}/{SUPABASE_BUCKET}/{object_path}"
@@ -100,6 +133,8 @@ async def supabase_upload(file_bytes: bytes, object_path: str, content_type: str
     return f"{PUBLIC_BASE}/{SUPABASE_BUCKET}/{object_path}?download=1"
 
 async def head_info(url: str) -> Tuple[int, str, int]:
+    """Retrieve basic HTTP header information for a URL."""
+
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.head(url)
         if r.status_code >= 400:
@@ -108,6 +143,8 @@ async def head_info(url: str) -> Tuple[int, str, int]:
         return r.status_code, r.headers.get("content-type", ""), size
 
 async def hailuo_video_from_prompt(image_url: str, prompt: str, seconds: int, resolution: str) -> str:
+    """Create a talking-pet style video using the Hailuo-02 model on Replicate."""
+
     if not REPLICATE_API_TOKEN:
         raise HTTPException(500, "Replicate API token not set")
 
@@ -150,6 +187,8 @@ async def hailuo_video_from_prompt(image_url: str, prompt: str, seconds: int, re
             time.sleep(2)
 
 async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
+    """Combine a video and an audio track into a single MP4 file."""
+
     tmpdir = tempfile.mkdtemp()
     vpath = os.path.join(tmpdir, "in.mp4")
     apath = os.path.join(tmpdir, "in.mp3")
@@ -184,15 +223,25 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
 # ===== Routes =====
 @app.get("/health")
 async def health():
+    """Simple health check used by deployment platforms."""
     return {"ok": True}
 
 @app.post("/jobs_prompt_only")
 async def create_job_with_prompt(req: JobPromptOnly):
+    """Generate a video from a static image and text prompt."""
     video_url = await hailuo_video_from_prompt(req.image_url, req.prompt, req.seconds, req.resolution)
     return {"video_url": video_url}
 
 @app.post("/jobs_prompt_tts")
 async def create_job_with_prompt_and_tts(req: JobPromptTTS):
+    """Generate a video with synchronized speech.
+
+    Steps:
+        1. Synthesize speech using ElevenLabs.
+        2. Create an animated video with Hailuo.
+        3. Mux the audio and video together and store the final file in Supabase.
+    """
+
     mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
     key = f"audio/{uuid.uuid4()}.mp3"
     audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
@@ -207,5 +256,6 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
 # ===== Debug =====
 @app.post("/debug/head")
 async def debug_head(req: HeadRequest):
+    """Fetch metadata about a URL without downloading the entire file."""
     status, ctype, size = await head_info(req.url)
     return {"status": status, "content_type": ctype, "bytes": size}

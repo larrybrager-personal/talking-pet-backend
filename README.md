@@ -1,55 +1,122 @@
 # Talking Pet Backend
 
-This repository contains a minimal FastAPI service used by the Talking Pet
-prototype.  It glues together a few third party services to turn a static pet
-photo and short script into an animated video with speech.
+Minimal FastAPI backend that turns a static pet photo and short script into an animated “talking pet” video by orchestrating third‑party services.
 
-## Features
+- ElevenLabs TTS → audio (MP3)
+- Replicate Hailuo‑02 → animation (MP4) from image + prompt
+- Supabase Storage → persists and serves public media URLs
+- Optional muxing → combines generated video + speech into final MP4
 
-* **ElevenLabs Text‑to‑Speech** – generates the audio track.
-* **Hailuo‑02 via Replicate** – creates an animated video from an image and
-  text prompt.
-* **Supabase Storage** – stores generated media and exposes public URLs.
-* Simple health and debugging endpoints.
+## Architecture (high level)
+1. Client calls an endpoint with an image URL and prompt.
+2. For TTS flow, service calls ElevenLabs to synthesize MP3.
+3. Service calls Replicate Hailuo‑02 to generate an MP4 from the image + prompt.
+4. Service uploads artifacts to Supabase Storage and returns public URLs.
+5. For TTS flow, backend muxes the MP4 + MP3 using ffmpeg (via imageio‑ffmpeg), then uploads the final MP4.
 
-## Local development
+OpenAPI docs available at `/docs` when running locally.
 
-1. Ensure [Python 3.10+](https://www.python.org/) is installed.
-2. Install dependencies:
+## Requirements
+- Python 3.10+
+- No system ffmpeg required; `imageio-ffmpeg` provides a bundled binary.
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Set the required environment variables.  The most important are:
+Install dependencies:
 
-   * `ELEVEN_API_KEY`
-   * `SUPABASE_URL`
-   * `SUPABASE_SERVICE_ROLE`
-   * `REPLICATE_API_TOKEN`
+```bash
+pip install -r requirements.txt
+```
 
-   Optional variables include `ALLOWED_ORIGIN`, `SUPABASE_BUCKET`,
-   `TTS_OUTPUT_FORMAT` and `TTS_MAX_CHARS`.
-4. Run the development server:
+## Environment variables
+The service expects the following environment variables (e.g., in a `.env` file):
 
-   ```bash
-   uvicorn main:app --reload
-   ```
+- ELEVEN_API_KEY: ElevenLabs API key (required for `/jobs_prompt_tts`).
+- REPLICATE_API_TOKEN: Replicate API token (required).
+- SUPABASE_URL: Your Supabase project URL, e.g. https://<project>.supabase.co (required).
+- SUPABASE_SERVICE_ROLE: Service role token used to upload to Storage (required; keep server‑side only).
+- SUPABASE_BUCKET: Bucket name for uploads (default: `pets`).
+- ALLOWED_ORIGIN: CORS origin, `*` by default.
+- TTS_OUTPUT_FORMAT: ElevenLabs output format (default: `mp3_44100_64`).
+- TTS_MAX_CHARS: Max TTS input length (default: `600`).
 
-## API overview
+Tip (PowerShell):
 
-| Method | Path               | Description                               |
-| ------ | ------------------ | ----------------------------------------- |
-| GET    | `/health`          | Basic health check                        |
-| POST   | `/jobs_prompt_only`| Create a video from image and prompt      |
-| POST   | `/jobs_prompt_tts` | Create a video with TTS audio             |
-| POST   | `/debug/head`      | Retrieve headers for a remote resource    |
+```powershell
+# Create a .env file at repo root so uvicorn auto-loads it
+@'
+ELEVEN_API_KEY=...
+REPLICATE_API_TOKEN=...
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE=...
+SUPABASE_BUCKET=pets
+ALLOWED_ORIGIN=*
+'@ | Out-File -Encoding UTF8 .env
+```
 
-Each POST endpoint accepts JSON bodies as defined by the Pydantic models in
-`main.py`.
+## Run locally
+
+```bash
+uvicorn main:app --reload
+```
+
+Base URL: http://localhost:8000
+
+## API reference
+
+- GET /health
+  - Response: { "ok": true }
+
+- POST /jobs_prompt_only
+  - Body (JSON):
+    {
+      "image_url": "https://example.com/pet.jpg",
+      "prompt": "The dog smiles and tilts its head",
+      "seconds": 6,
+      "resolution": "768p",
+      "model": "minimax/hailuo-02" // optional; defaults to Hailuo‑02
+    }
+  - Response: { "video_url": "https://.../video.mp4" }
+
+- POST /jobs_prompt_tts
+  - Body (JSON):
+    {
+      "image_url": "https://example.com/pet.jpg",
+      "prompt": "The dog says hello",
+      "text": "Hi there!",
+      "voice_id": "<elevenlabs-voice-id>",
+      "seconds": 6,
+      "resolution": "768p",
+      "model": "minimax/hailuo-02"
+    }
+  - Response:
+    {
+      "audio_url": "https://.../audio.mp3",
+      "video_url": "https://.../video.mp4",
+      "final_url": "https://.../final.mp4"
+    }
+
+- POST /debug/head
+  - Body: { "url": "https://example.com/file" }
+  - Response: { "status": 200, "content_type": "image/jpeg", "bytes": 12345 }
+
+Notes
+- TTS requests longer than TTS_MAX_CHARS will be rejected (400).
+- Generated audio larger than ~9.5 MB will be rejected (400).
+- Muxing adds a small initial audio delay (~0.5s) to improve sync.
 
 ## Deployment
+A ready‑to‑use Render spec is provided in `render.yaml`.
 
-The included `render.yaml` describes a simple configuration for deploying the
-service on [Render](https://render.com/).  You can adapt it for other hosting
-providers if needed.
+- Build: pip install -r requirements.txt
+- Start: uvicorn main:app --host 0.0.0.0 --port $PORT
+- Set env vars in your Render service: ELEVEN_API_KEY, REPLICATE_API_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE, SUPABASE_BUCKET, ALLOWED_ORIGIN
+
+Security
+- Never expose the Supabase service role token to the browser/client.
+- Restrict ALLOWED_ORIGIN in production to your actual frontend origin.
+
+## Troubleshooting
+- 401/403 from Replicate: check REPLICATE_API_TOKEN.
+- 401 from ElevenLabs: check ELEVEN_API_KEY and voice_id.
+- 403 from Supabase upload: ensure SUPABASE_SERVICE_ROLE is set and bucket exists.
+- Video/audio out of sync: verify seconds vs audio duration; muxing uses `-shortest` and 0.5s delay.
 

@@ -102,3 +102,92 @@ Fetch headers for a remote resource.
 - Lint with `flake8 main.py`.
 - Format check with `black --check main.py`.
 - Additional sanity: `python -m py_compile main.py`.
+
+# AGENTS (prompts and integration guidelines)
+
+This file documents agent-style prompts, templates, and integration patterns used when constructing prompts, scripts, and orchestrating the backend. It's intended for frontend engineers, prompt engineers, or any automated agents that prepare requests to the backend endpoints.
+
+## Purpose
+The backend expects two primary flows:
+
+- Prompt-only: create a short talking animation from `image_url` + `prompt`.
+- Prompt+TTS: create animation and synthesize speech from `text` + `voice_id`, then mux and upload the final MP4.
+
+These flows are driven by concise prompt and script text. Use the templates below to generate reliable results.
+
+## Agent roles
+
+- Prompt Author (Human / LLM): Produces the short animation prompt describing the emotion, mouth movement, head tilt, eye direction, and any accessory movement.
+- Script Writer (Human / LLM): Produces short spoken text for TTS. Keep it under `TTS_MAX_CHARS` and prefer 1-3 short sentences.
+- Uploader (Client): Calls our `/jobs_prompt_only` or `/jobs_prompt_tts` endpoints and handles returned URLs.
+
+## Prompt templates (for Hailuo‑02)
+Keep prompts short and concrete. Include style cues and motion intent.
+
+Template 1 — friendly greeting:
+
+"A friendly golden retriever smiles, blinks, and tilts its head to the right while speaking gently. Slight ear movement, natural mouth shapes synced to speech, photorealistic style."
+
+Template 2 — excited bark:
+
+"Small terrier jumps slightly, wags tail, opens mouth in a quick excited bark. Eyes wide, playful expression, short energetic motion loops."
+
+Template 3 — subtle mouth movement for voiceover:
+
+"Calm cat looks at camera, subtle lip sync to a speaking voice, small eyebrow and ear twitches, natural breathing motion."
+
+Notes:
+- Avoid overly long prompts — keep under 1–2 sentences.
+- Mention the first frame reference (the `image_url` will be used by the model).
+
+## Script / TTS guidelines
+- Keep scripts brief. Ten to twenty words perform best for short animations.
+- Prefer natural spoken phrasing; include punctuation to help TTS prosody.
+- Avoid special characters and emojis.
+- Stay below `TTS_MAX_CHARS` (default 600).
+
+Example scripts:
+- "Hi, I'm Charlie! Want to play?"
+- "Don't forget your walk at 5pm."
+
+## Example interaction flow (frontend)
+1. Prepare prompt and/or script using the templates above.
+2. Send POST to `/jobs_prompt_tts` with JSON body:
+   ```json
+   {
+     "image_url": "https://.../pet.jpg",
+     "prompt": "A friendly golden retriever smiles, blinks, and tilts its head to the right.",
+     "text": "Hi, I'm Charlie! Wanna play?",
+     "voice_id": "eleven-voice-id",
+     "seconds": 6
+   }
+   ```
+3. Poll server or handle the returned `final_url` when ready (this implementation is synchronous — the endpoint waits for Replicate to finish). In production, consider an async job queue.
+
+## Error handling patterns
+- 400: User-provided data (text too long, invalid URL, Replicate/ElevenLabs responded with a job rejection).
+- 500: Server config missing (env vars), or third-party token issues.
+
+## Prompt engineering tips
+- If lips look off, add "stronger lip sync" or "clear mouth shapes" to the prompt.
+- To reduce background artifacts, include "photorealistic" or "realistic pet photo style".
+- For character style (cartoon vs photorealistic), be explicit.
+
+## Next steps / improvements
+- Switch to an asynchronous job queue and return job ids so the frontend can poll a status endpoint.
+- Allow uploading local images directly to Supabase from the client and pass the public URL to the backend.
+- Add a small server-side cache for identical requests to save Replicate credits.
+
+## Frontend example (JS)
+```js
+// assume `base` is the backend base URL
+async function createTalkingPet(imageUrl, prompt, text, voiceId) {
+  const res = await fetch(`${base}/jobs_prompt_tts`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({image_url: imageUrl, prompt, text, voice_id: voiceId})
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+```

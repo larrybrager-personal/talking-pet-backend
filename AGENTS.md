@@ -1,7 +1,7 @@
 # AGENTS Guidelines
 
 ## Project Overview
-This FastAPI service glues together several third-party providers to turn a static pet image and short script into a talking video. It synthesizes speech with **ElevenLabs**, generates animation with **multiple i2v models via Replicate** (Hailuo-02, Kling Video, Animate Diff), and stores results in **Supabase Storage**.
+This FastAPI service glues together several third-party providers to turn a static pet image and short script into a talking video. It synthesizes speech with **ElevenLabs**, generates animation with **multiple i2v models via Replicate** (Hailuo-02, Kling v2.1, Wan v2.2), and stores results in **Supabase Storage**.
 
 ## Setup Instructions
 - **Python**: 3.10+
@@ -34,8 +34,8 @@ List supported i2v models.
   {
     "supported_models": {
       "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": true},
-      "kuaishou/kling-video": {"name": "Kling v2.1", "is_default": false},
-      "fal-ai/animate-diff": {"name": "Wan v2.2", "is_default": false}
+      "kwaivgi/kling-v2.1": {"name": "Kling v2.1", "is_default": false},
+      "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": false}
     },
     "default_model": "minimax/hailuo-02"
   }
@@ -189,7 +189,7 @@ Example scripts:
      "text": "Hi, I'm Charlie! Wanna play?",
      "voice_id": "eleven-voice-id",
      "seconds": 6,
-     "model": "kuaishou/kling-video"
+     "model": "kwaivgi/kling-v2.1"
    }
    ```
 

@@ -5,8 +5,8 @@ Minimal FastAPI backend that turns a static pet photo and short script into an a
 - ElevenLabs TTS → audio (MP3)
 - Multiple Replicate i2v models → animation (MP4) from image + prompt
   - Hailuo-02 (default)
-  - Kling Video
-  - Animate Diff
+  - Kling v2.1
+  - Wan v2.2
 - Supabase Storage → persists and serves public media URLs
 - Optional muxing → combines generated video + speech into final MP4
 
@@ -72,8 +72,8 @@ Base URL: http://localhost:8000
   - Response: { 
       "supported_models": {
         "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": true},
-        "kuaishou/kling-video": {"name": "Kling v2.1", "is_default": false},
-        "fal-ai/animate-diff": {"name": "Wan v2.2", "is_default": false}
+        "kwaivgi/kling-v2.1": {"name": "Kling v2.1", "is_default": false},
+        "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": false}
       },
       "default_model": "minimax/hailuo-02"
     }
@@ -85,7 +85,7 @@ Base URL: http://localhost:8000
       "prompt": "The dog smiles and tilts its head",
       "seconds": 6,
       "resolution": "768p",
-      "model": "kuaishou/kling-video" // optional; defaults to Hailuo-02
+      "model": "kwaivgi/kling-v2.1" // optional; defaults to Hailuo-02
     }
   - Response: { "video_url": "https://.../video.mp4" }
 
@@ -98,7 +98,7 @@ Base URL: http://localhost:8000
       "voice_id": "<elevenlabs-voice-id>",
       "seconds": 6,
       "resolution": "768p",
-      "model": "fal-ai/animate-diff"
+      "model": "wan-video/wan-2.2-s2v"
     }
   - Response:
     {

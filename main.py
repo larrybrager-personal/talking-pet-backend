@@ -44,7 +44,7 @@ SUPPORTED_MODELS = {
             "resolution": "resolution",
         },
     },
-    "kuaishou/kling-video": {
+    "kwaivgi/kling-v2.1": {
         "name": "Kling v2.1",
         "default_params": {
             "mode": "std",
@@ -57,7 +57,7 @@ SUPPORTED_MODELS = {
             "resolution": "aspect_ratio",  # Kling uses aspect ratio
         },
     },
-    "fal-ai/animate-diff": {
+    "wan-video/wan-2.2-s2v": {
         "name": "Wan v2.2",
         "default_params": {
             "guidance_scale": 7.5,
@@ -197,7 +197,7 @@ def build_model_payload(
         payload["input"][param_mapping["seconds"]] = seconds
     if "resolution" in param_mapping:
         # Handle special case for Kling which uses aspect ratio
-        if model == "kuaishou/kling-video":
+        if model == "kwaivgi/kling-v2.1":
             # Convert resolution to aspect ratio for Kling
             if resolution == "768p":
                 payload["input"][param_mapping["resolution"]] = "1:1"

@@ -88,6 +88,7 @@ Base URL: http://localhost:8000
       "model": "kwaivgi/kling-v2.1" // optional; defaults to Hailuo-02
     }
   - Response: { "video_url": "https://.../video.mp4" }
+  - Note: wan-video/wan-2.2-s2v cannot be used (requires audio)
 
 - POST /jobs_prompt_tts
   - Body (JSON):
@@ -115,6 +116,10 @@ Notes
 - TTS requests longer than TTS_MAX_CHARS will be rejected (400).
 - Generated audio larger than ~9.5 MB will be rejected (400).
 - Muxing adds a small initial audio delay (~0.5s) to improve sync.
+- **wan-video/wan-2.2-s2v** is a speech-to-video model that requires audio input:
+  - Cannot be used with `/jobs_prompt_only` endpoint (will return 400 error)
+  - When used with `/jobs_prompt_tts`, the generated video already includes synced audio
+  - For Wan model, `final_url` equals `video_url` (no separate muxing needed)
 
 ## Deployment
 A ready‑to‑use Render spec is provided in `render.yaml`.

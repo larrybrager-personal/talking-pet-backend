@@ -64,10 +64,11 @@ SUPPORTED_MODELS = {
             "num_inference_steps": 25,
         },
         "param_mapping": {
-            "image_url": "init_image",
+            "image_url": "image",
             "prompt": "prompt",
             "seconds": "duration",
             "resolution": "resolution",
+            "audio_url": "audio",  # Speech-to-video model requires audio
         },
     },
 }
@@ -167,7 +168,12 @@ def get_model_config(model: str) -> dict:
 
 
 def build_model_payload(
-    model: str, image_url: str, prompt: str, seconds: int, resolution: str
+    model: str,
+    image_url: str,
+    prompt: str,
+    seconds: int,
+    resolution: str,
+    audio_url: str = None,
 ) -> dict:
     """Build the payload for a specific model based on its parameter mapping.
 
@@ -177,6 +183,7 @@ def build_model_payload(
         prompt: Text prompt
         seconds: Duration in seconds
         resolution: Target resolution or aspect ratio
+        audio_url: Audio URL for speech-to-video models (optional)
 
     Returns:
         Payload dictionary for the model
@@ -215,6 +222,8 @@ def build_model_payload(
                 payload["input"][param_mapping["resolution"]] = "1:1"
         else:
             payload["input"][param_mapping["resolution"]] = resolution
+    if "audio_url" in param_mapping and audio_url:
+        payload["input"][param_mapping["audio_url"]] = audio_url
 
     return payload
 
@@ -303,7 +312,12 @@ async def head_info(url: str) -> Tuple[int, str, int]:
 
 
 async def replicate_video_from_prompt(
-    model: str, image_url: str, prompt: str, seconds: int, resolution: str
+    model: str,
+    image_url: str,
+    prompt: str,
+    seconds: int,
+    resolution: str,
+    audio_url: str = None,
 ) -> str:
     """Create a video using a specified Replicate model."""
 
@@ -311,7 +325,9 @@ async def replicate_video_from_prompt(
         raise HTTPException(500, "Replicate API token not set")
 
     # Validate model and build payload
-    payload = build_model_payload(model, image_url, prompt, seconds, resolution)
+    payload = build_model_payload(
+        model, image_url, prompt, seconds, resolution, audio_url
+    )
 
     headers = {
         "Authorization": f"Token {REPLICATE_API_TOKEN}",
@@ -359,12 +375,17 @@ async def replicate_video_from_prompt(
 
 
 async def generate_video_from_prompt(
-    model: str, image_url: str, prompt: str, seconds: int, resolution: str
+    model: str,
+    image_url: str,
+    prompt: str,
+    seconds: int,
+    resolution: str,
+    audio_url: str = None,
 ) -> str:
     """Create a talking-pet style video using the specified Replicate model."""
 
     return await replicate_video_from_prompt(
-        model, image_url, prompt, seconds, resolution
+        model, image_url, prompt, seconds, resolution, audio_url
     )
 
 
@@ -432,8 +453,18 @@ async def list_supported_models():
 @app.post("/jobs_prompt_only")
 async def create_job_with_prompt(req: JobPromptOnly):
     """Generate a video from a static image and text prompt."""
+    model = req.model or DEFAULT_MODEL
+
+    # Validate that speech-to-video models are not used for prompt-only requests
+    if model == "wan-video/wan-2.2-s2v":
+        raise HTTPException(
+            400,
+            "wan-video/wan-2.2-s2v is a speech-to-video model that requires audio. "
+            "Use /jobs_prompt_tts endpoint instead.",
+        )
+
     video_url = await generate_video_from_prompt(
-        req.model or DEFAULT_MODEL,
+        model,
         req.image_url,
         req.prompt,
         req.seconds,
@@ -448,31 +479,51 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
 
     Steps:
         1. Synthesize speech using ElevenLabs.
-        2. Create an animated video with Hailuo.
-        3. Mux the audio and video together and store the final file in
-           Supabase.
+        2. Create an animated video with the selected model.
+        3. For speech-to-video models (like Wan), provide the audio to the model.
+        4. For other models, mux the audio and video together and store the final file.
     """
+    model = req.model or DEFAULT_MODEL
 
     mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
     key = f"audio/{uuid.uuid4()}.mp3"
     audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
-    video_url = await generate_video_from_prompt(
-        req.model or DEFAULT_MODEL,
-        req.image_url,
-        req.prompt,
-        req.seconds,
-        req.resolution,
-    )
 
-    final_bytes = await mux_video_audio(video_url, audio_public_url)
-    final_key = f"videos/{uuid.uuid4()}.mp4"
-    final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
+    # For speech-to-video models like Wan, pass the audio URL to the model
+    if model == "wan-video/wan-2.2-s2v":
+        video_url = await generate_video_from_prompt(
+            model,
+            req.image_url,
+            req.prompt,
+            req.seconds,
+            req.resolution,
+            audio_public_url,
+        )
+        # For speech-to-video models, the video already has synced audio
+        return {
+            "audio_url": audio_public_url,
+            "video_url": video_url,
+            "final_url": video_url,  # No need to mux, already synced
+        }
+    else:
+        # For other models, generate video separately and mux with audio
+        video_url = await generate_video_from_prompt(
+            model,
+            req.image_url,
+            req.prompt,
+            req.seconds,
+            req.resolution,
+        )
 
-    return {
-        "audio_url": audio_public_url,
-        "video_url": video_url,
-        "final_url": final_url,
-    }
+        final_bytes = await mux_video_audio(video_url, audio_public_url)
+        final_key = f"videos/{uuid.uuid4()}.mp4"
+        final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
+
+        return {
+            "audio_url": audio_public_url,
+            "video_url": video_url,
+            "final_url": final_url,
+        }
 
 
 # ===== Debug =====

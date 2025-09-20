@@ -47,11 +47,11 @@ SUPPORTED_MODELS = {
     "kwaivgi/kling-v2.1": {
         "name": "Kling v2.1",
         "default_params": {
-            "mode": "std",
+            "mode": "standard",
             "aspect_ratio": "1:1",
         },
         "param_mapping": {
-            "image_url": "image",
+            "image_url": "start_image",
             "prompt": "prompt",
             "seconds": "duration",
             "resolution": "aspect_ratio",  # Kling uses aspect ratio
@@ -194,7 +194,15 @@ def build_model_payload(
     if "prompt" in param_mapping:
         payload["input"][param_mapping["prompt"]] = prompt
     if "seconds" in param_mapping:
-        payload["input"][param_mapping["seconds"]] = seconds
+        # Handle special case for Kling which only accepts duration 5 or 10
+        if model == "kwaivgi/kling-v2.1":
+            # Map seconds to valid Kling duration values
+            if seconds <= 5:
+                payload["input"][param_mapping["seconds"]] = 5
+            else:
+                payload["input"][param_mapping["seconds"]] = 10
+        else:
+            payload["input"][param_mapping["seconds"]] = seconds
     if "resolution" in param_mapping:
         # Handle special case for Kling which uses aspect ratio
         if model == "kwaivgi/kling-v2.1":

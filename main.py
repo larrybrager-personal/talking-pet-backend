@@ -71,6 +71,19 @@ SUPPORTED_MODELS = {
             "audio_url": "audio",  # Speech-to-video model requires audio
         },
     },
+    "bytedance/seedance-1-lite": {
+        "name": "SeeDance-1 Lite",
+        "default_params": {
+            "guidance_scale": 7.5,
+            "num_inference_steps": 20,
+        },
+        "param_mapping": {
+            "image_url": "image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "resolution",
+        },
+    },
 }
 
 # Default model

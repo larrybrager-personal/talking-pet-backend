@@ -7,6 +7,7 @@ Minimal FastAPI backend that turns a static pet photo and short script into an a
   - Hailuo-02 (default)
   - Kling v2.1
   - Wan v2.2
+  - SeeDance-1 Lite
 - Supabase Storage → persists and serves public media URLs
 - Optional muxing → combines generated video + speech into final MP4
 
@@ -73,7 +74,8 @@ Base URL: http://localhost:8000
       "supported_models": {
         "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": true},
         "kwaivgi/kling-v2.1": {"name": "Kling v2.1", "is_default": false},
-        "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": false}
+        "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": false},
+        "bytedance/seedance-1-lite": {"name": "SeeDance-1 Lite", "is_default": false}
       },
       "default_model": "minimax/hailuo-02"
     }

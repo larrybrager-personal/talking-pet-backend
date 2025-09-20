@@ -1,7 +1,7 @@
 # AGENTS Guidelines
 
 ## Project Overview
-This FastAPI service glues together several third-party providers to turn a static pet image and short script into a talking video. It synthesizes speech with **ElevenLabs**, generates animation with **multiple i2v models via Replicate** (Hailuo-02, Kling v2.1, Wan v2.2), and stores results in **Supabase Storage**.
+This FastAPI service glues together several third-party providers to turn a static pet image and short script into a talking video. It synthesizes speech with **ElevenLabs**, generates animation with **multiple i2v models via Replicate** (Hailuo-02, Kling Video, Animate Diff), and stores results in **Supabase Storage**.
 
 ## Setup Instructions
 - **Python**: 3.10+
@@ -34,8 +34,8 @@ List supported i2v models.
   {
     "supported_models": {
       "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": true},
-      "kling/v2.1": {"name": "Kling v2.1", "is_default": false},
-      "wan/v2.2": {"name": "Wan v2.2", "is_default": false}
+      "kuaishou/kling-video": {"name": "Kling v2.1", "is_default": false},
+      "fal-ai/animate-diff": {"name": "Wan v2.2", "is_default": false}
     },
     "default_model": "minimax/hailuo-02"
   }
@@ -69,7 +69,7 @@ Create a video and match audio.
     "voice_id": "voice",
     "seconds": 6,
     "resolution": "768p",
-    "model": "kling/v2.1"
+    "model": "kuaishou/kling-video"
   }
   ```
 - **Response**:
@@ -110,7 +110,7 @@ Fetch headers for a remote resource.
     body: JSON.stringify({
       image_url: "https://example.com/pet.jpg", 
       prompt: "Hi",
-      model: "kling/v2.1"
+      model: "kuaishou/kling-video"
     })
   }).then(r => r.json());
   ```
@@ -189,7 +189,7 @@ Example scripts:
      "text": "Hi, I'm Charlie! Wanna play?",
      "voice_id": "eleven-voice-id",
      "seconds": 6,
-     "model": "kling/v2.1"
+     "model": "kuaishou/kling-video"
    }
    ```
 

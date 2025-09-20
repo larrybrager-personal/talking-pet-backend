@@ -44,7 +44,7 @@ SUPPORTED_MODELS = {
             "resolution": "resolution",
         },
     },
-    "kling/v2.1": {
+    "kuaishou/kling-video": {
         "name": "Kling v2.1",
         "default_params": {
             "mode": "std",
@@ -57,7 +57,7 @@ SUPPORTED_MODELS = {
             "resolution": "aspect_ratio",  # Kling uses aspect ratio
         },
     },
-    "wan/v2.2": {
+    "fal-ai/animate-diff": {
         "name": "Wan v2.2",
         "default_params": {
             "guidance_scale": 7.5,
@@ -197,7 +197,7 @@ def build_model_payload(
         payload["input"][param_mapping["seconds"]] = seconds
     if "resolution" in param_mapping:
         # Handle special case for Kling which uses aspect ratio
-        if model == "kling/v2.1":
+        if model == "kuaishou/kling-video":
             # Convert resolution to aspect ratio for Kling
             if resolution == "768p":
                 payload["input"][param_mapping["resolution"]] = "1:1"
@@ -303,9 +303,7 @@ async def replicate_video_from_prompt(
         raise HTTPException(500, "Replicate API token not set")
 
     # Validate model and build payload
-    payload = build_model_payload(
-        model, image_url, prompt, seconds, resolution
-    )
+    payload = build_model_payload(model, image_url, prompt, seconds, resolution)
 
     headers = {
         "Authorization": f"Token {REPLICATE_API_TOKEN}",

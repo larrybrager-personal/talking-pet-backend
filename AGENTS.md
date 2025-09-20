@@ -57,6 +57,7 @@ Create a video from an image and prompt.
   ```json
   {"video_url": "https://.../video.mp4"}
   ```
+- **Note**: `wan-video/wan-2.2-s2v` cannot be used (speech-to-video model requires audio)
 
 ### `POST /jobs_prompt_tts`
 Create a video and match audio.
@@ -69,7 +70,7 @@ Create a video and match audio.
     "voice_id": "voice",
     "seconds": 6,
     "resolution": "768p",
-    "model": "kuaishou/kling-video"
+    "model": "wan-video/wan-2.2-s2v"
   }
   ```
 - **Response**:
@@ -80,6 +81,7 @@ Create a video and match audio.
     "final_url": "https://.../final.mp4"
   }
   ```
+- **Note**: When using `wan-video/wan-2.2-s2v`, the model generates video with synced audio, so `final_url` equals `video_url`
 
 ### `POST /debug/head`
 Fetch headers for a remote resource.
@@ -110,7 +112,7 @@ Fetch headers for a remote resource.
     body: JSON.stringify({
       image_url: "https://example.com/pet.jpg", 
       prompt: "Hi",
-      model: "kuaishou/kling-video"
+      model: "kwaivgi/kling-v2.1"
     })
   }).then(r => r.json());
   ```

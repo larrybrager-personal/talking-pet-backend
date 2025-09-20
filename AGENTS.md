@@ -1,7 +1,7 @@
 # AGENTS Guidelines
 
 ## Project Overview
-This FastAPI service glues together several third-party providers to turn a static pet image and short script into a talking video. It synthesizes speech with **ElevenLabs**, generates animation with **Hailuo-02 via Replicate**, and stores results in **Supabase Storage**.
+This FastAPI service glues together several third-party providers to turn a static pet image and short script into a talking video. It synthesizes speech with **ElevenLabs**, generates animation with **multiple i2v models via Replicate** (Hailuo-02, Kling v2.1, Wan v2.2), and stores results in **Supabase Storage**.
 
 ## Setup Instructions
 - **Python**: 3.10+
@@ -24,6 +24,21 @@ Simple health check.
 - **Response**:
   ```json
   {"ok": true}
+  ```
+
+### `GET /models`
+List supported i2v models.
+- **Request**: none
+- **Response**:
+  ```json
+  {
+    "supported_models": {
+      "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": true},
+      "kling/v2.1": {"name": "Kling v2.1", "is_default": false},
+      "wan/v2.2": {"name": "Wan v2.2", "is_default": false}
+    },
+    "default_model": "minimax/hailuo-02"
+  }
   ```
 
 ### `POST /jobs_prompt_only`
@@ -54,7 +69,7 @@ Create a video and match audio.
     "voice_id": "voice",
     "seconds": 6,
     "resolution": "768p",
-    "model": "minimax/hailuo-02"
+    "model": "kling/v2.1"
   }
   ```
 - **Response**:
@@ -86,10 +101,17 @@ Fetch headers for a remote resource.
   const base = "http://localhost:8000";
   await fetch(`${base}/health`).then(r => r.json());
 
+  // Check supported models
+  await fetch(`${base}/models`).then(r => r.json());
+
   await fetch(`${base}/jobs_prompt_only`, {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({image_url: "https://example.com/pet.jpg", prompt: "Hi"})
+    body: JSON.stringify({
+      image_url: "https://example.com/pet.jpg", 
+      prompt: "Hi",
+      model: "kling/v2.1"
+    })
   }).then(r => r.json());
   ```
 
@@ -121,8 +143,8 @@ These flows are driven by concise prompt and script text. Use the templates belo
 - Script Writer (Human / LLM): Produces short spoken text for TTS. Keep it under `TTS_MAX_CHARS` and prefer 1-3 short sentences.
 - Uploader (Client): Calls our `/jobs_prompt_only` or `/jobs_prompt_tts` endpoints and handles returned URLs.
 
-## Prompt templates (for Hailuo‑02)
-Keep prompts short and concrete. Include style cues and motion intent.
+## Prompt templates (for multiple i2v models)
+Keep prompts short and concrete. Include style cues and motion intent. Different models may respond differently to prompting styles:
 
 Template 1 — friendly greeting:
 
@@ -151,21 +173,30 @@ Example scripts:
 - "Don't forget your walk at 5pm."
 
 ## Example interaction flow (frontend)
-1. Prepare prompt and/or script using the templates above.
-2. Send POST to `/jobs_prompt_tts` with JSON body:
+1. Check available models (optional):
+   ```js
+   const models = await fetch(`${base}/models`).then(r => r.json());
+   console.log('Available models:', models.supported_models);
+   ```
+
+2. Prepare prompt and/or script using the templates above.
+
+3. Send POST to `/jobs_prompt_tts` with JSON body:
    ```json
    {
      "image_url": "https://.../pet.jpg",
      "prompt": "A friendly golden retriever smiles, blinks, and tilts its head to the right.",
      "text": "Hi, I'm Charlie! Wanna play?",
      "voice_id": "eleven-voice-id",
-     "seconds": 6
+     "seconds": 6,
+     "model": "kling/v2.1"
    }
    ```
-3. Poll server or handle the returned `final_url` when ready (this implementation is synchronous — the endpoint waits for Replicate to finish). In production, consider an async job queue.
+
+4. Poll server or handle the returned `final_url` when ready (this implementation is synchronous — the endpoint waits for Replicate to finish). In production, consider an async job queue.
 
 ## Error handling patterns
-- 400: User-provided data (text too long, invalid URL, Replicate/ElevenLabs responded with a job rejection).
+- 400: User-provided data (text too long, invalid URL, unsupported model, Replicate/ElevenLabs responded with a job rejection).
 - 500: Server config missing (env vars), or third-party token issues.
 
 ## Prompt engineering tips
@@ -181,13 +212,25 @@ Example scripts:
 ## Frontend example (JS)
 ```js
 // assume `base` is the backend base URL
-async function createTalkingPet(imageUrl, prompt, text, voiceId) {
+async function createTalkingPet(imageUrl, prompt, text, voiceId, model = null) {
   const res = await fetch(`${base}/jobs_prompt_tts`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({image_url: imageUrl, prompt, text, voice_id: voiceId})
+    body: JSON.stringify({
+      image_url: imageUrl, 
+      prompt, 
+      text, 
+      voice_id: voiceId,
+      model  // Will use default if null
+    })
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// Get available models
+async function getSupportedModels() {
+  const res = await fetch(`${base}/models`);
   return res.json();
 }
 ```

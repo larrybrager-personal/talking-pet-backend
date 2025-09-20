@@ -233,6 +233,21 @@ def build_model_payload(
                 payload["input"][param_mapping["resolution"]] = "16:9"
             else:
                 payload["input"][param_mapping["resolution"]] = "1:1"
+        elif model == "bytedance/seedance-1-lite":
+            # SeeDance only accepts "480p", "720p", "1080p"
+            if resolution == "480p":
+                payload["input"][param_mapping["resolution"]] = "480p"
+            elif resolution == "720p":
+                payload["input"][param_mapping["resolution"]] = "720p"
+            elif resolution == "1080p":
+                payload["input"][param_mapping["resolution"]] = "1080p"
+            elif resolution == "1024p":
+                payload["input"][param_mapping["resolution"]] = "1080p"
+            elif resolution == "768p":
+                payload["input"][param_mapping["resolution"]] = "720p"
+            else:
+                # Default to 720p for any other resolution
+                payload["input"][param_mapping["resolution"]] = "720p"
         else:
             payload["input"][param_mapping["resolution"]] = resolution
     if "audio_url" in param_mapping and audio_url:

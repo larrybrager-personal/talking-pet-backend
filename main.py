@@ -27,9 +27,53 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE = os.getenv("SUPABASE_SERVICE_ROLE", "")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "pets")
 
-# Replicate / Hailuo-02
+# Replicate configuration
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
-HAILUO_MODEL = "minimax/hailuo-02"
+
+# Supported i2v models configuration
+SUPPORTED_MODELS = {
+    "minimax/hailuo-02": {
+        "name": "Hailuo-02",
+        "default_params": {
+            "prompt_optimizer": False,
+        },
+        "param_mapping": {
+            "image_url": "first_frame_image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "resolution",
+        },
+    },
+    "kling/v2.1": {
+        "name": "Kling v2.1",
+        "default_params": {
+            "mode": "std",
+            "aspect_ratio": "1:1",
+        },
+        "param_mapping": {
+            "image_url": "image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "aspect_ratio",  # Kling uses aspect ratio
+        },
+    },
+    "wan/v2.2": {
+        "name": "Wan v2.2",
+        "default_params": {
+            "guidance_scale": 7.5,
+            "num_inference_steps": 25,
+        },
+        "param_mapping": {
+            "image_url": "init_image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "resolution",
+        },
+    },
+}
+
+# Default model
+DEFAULT_MODEL = "minimax/hailuo-02"
 
 # TTS tuning
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
@@ -39,7 +83,7 @@ PUBLIC_BASE = f"{SUPABASE_URL}/storage/v1/object/public"
 UPLOAD_BASE = f"{SUPABASE_URL}/storage/v1/object"
 
 # ===== App =====
-app = FastAPI(title="Talking Pet Backend (Hailuo-02)")
+app = FastAPI(title="Talking Pet Backend (Multi-Model)")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[ALLOWED_ORIGIN] if ALLOWED_ORIGIN != "*" else ["*"],
@@ -101,6 +145,72 @@ class HeadRequest(BaseModel):
 
 
 # ===== Helpers =====
+def get_model_config(model: str) -> dict:
+    """Get configuration for a supported model.
+
+    Args:
+        model: Model identifier (e.g., 'minimax/hailuo-02')
+
+    Returns:
+        Model configuration dictionary
+
+    Raises:
+        HTTPException: If model is not supported
+    """
+    if model not in SUPPORTED_MODELS:
+        supported_list = ", ".join(SUPPORTED_MODELS.keys())
+        raise HTTPException(
+            400,
+            f"Unsupported model '{model}'. Supported models: {supported_list}",
+        )
+    return SUPPORTED_MODELS[model]
+
+
+def build_model_payload(
+    model: str, image_url: str, prompt: str, seconds: int, resolution: str
+) -> dict:
+    """Build the payload for a specific model based on its parameter mapping.
+
+    Args:
+        model: Model identifier
+        image_url: Input image URL
+        prompt: Text prompt
+        seconds: Duration in seconds
+        resolution: Target resolution or aspect ratio
+
+    Returns:
+        Payload dictionary for the model
+    """
+    config = get_model_config(model)
+    param_mapping = config["param_mapping"]
+    default_params = config.get("default_params", {})
+
+    # Build payload using parameter mapping
+    payload = {"input": default_params.copy()}
+
+    # Map standard parameters to model-specific names
+    if "image_url" in param_mapping:
+        payload["input"][param_mapping["image_url"]] = image_url
+    if "prompt" in param_mapping:
+        payload["input"][param_mapping["prompt"]] = prompt
+    if "seconds" in param_mapping:
+        payload["input"][param_mapping["seconds"]] = seconds
+    if "resolution" in param_mapping:
+        # Handle special case for Kling which uses aspect ratio
+        if model == "kling/v2.1":
+            # Convert resolution to aspect ratio for Kling
+            if resolution == "768p":
+                payload["input"][param_mapping["resolution"]] = "1:1"
+            elif resolution == "1024p":
+                payload["input"][param_mapping["resolution"]] = "16:9"
+            else:
+                payload["input"][param_mapping["resolution"]] = "1:1"
+        else:
+            payload["input"][param_mapping["resolution"]] = resolution
+
+    return payload
+
+
 async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
     """Generate speech with ElevenLabs and return it as raw bytes.
 
@@ -192,18 +302,14 @@ async def replicate_video_from_prompt(
     if not REPLICATE_API_TOKEN:
         raise HTTPException(500, "Replicate API token not set")
 
+    # Validate model and build payload
+    payload = build_model_payload(
+        model, image_url, prompt, seconds, resolution
+    )
+
     headers = {
         "Authorization": f"Token {REPLICATE_API_TOKEN}",
         "Content-Type": "application/json",
-    }
-    payload = {
-        "input": {
-            "prompt": prompt,
-            "duration": seconds,
-            "resolution": resolution,
-            "prompt_optimizer": False,
-            "first_frame_image": image_url,
-        }
     }
 
     create_url = f"https://api.replicate.com/v1/models/{model}/predictions"
@@ -246,7 +352,7 @@ async def replicate_video_from_prompt(
             time.sleep(2)
 
 
-async def hailuo_video_from_prompt(
+async def generate_video_from_prompt(
     model: str, image_url: str, prompt: str, seconds: int, resolution: str
 ) -> str:
     """Create a talking-pet style video using the specified Replicate model."""
@@ -305,11 +411,23 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/models")
+async def list_supported_models():
+    """List all supported i2v models and their configurations."""
+    models = {}
+    for model_id, config in SUPPORTED_MODELS.items():
+        models[model_id] = {
+            "name": config["name"],
+            "is_default": model_id == DEFAULT_MODEL,
+        }
+    return {"supported_models": models, "default_model": DEFAULT_MODEL}
+
+
 @app.post("/jobs_prompt_only")
 async def create_job_with_prompt(req: JobPromptOnly):
     """Generate a video from a static image and text prompt."""
-    video_url = await hailuo_video_from_prompt(
-        req.model or HAILUO_MODEL,
+    video_url = await generate_video_from_prompt(
+        req.model or DEFAULT_MODEL,
         req.image_url,
         req.prompt,
         req.seconds,
@@ -332,8 +450,8 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
     mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
     key = f"audio/{uuid.uuid4()}.mp3"
     audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
-    video_url = await hailuo_video_from_prompt(
-        req.model or HAILUO_MODEL,
+    video_url = await generate_video_from_prompt(
+        req.model or DEFAULT_MODEL,
         req.image_url,
         req.prompt,
         req.seconds,

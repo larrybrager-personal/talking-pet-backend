@@ -448,7 +448,8 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
         "-c:a",
         "aac",
         "-af",
-        "adelay=500|500",  # add 0.5s delay to audio start
+        # add 0.6s delay to audio start and 0.6s outro buffer
+        "adelay=600|600,apad=pad_dur=0.6",
         "-shortest",
         fpath,
     ]

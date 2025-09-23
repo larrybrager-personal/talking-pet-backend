@@ -117,7 +117,7 @@ Base URL: http://localhost:8000
 Notes
 - TTS requests longer than TTS_MAX_CHARS will be rejected (400).
 - Generated audio larger than ~9.5 MB will be rejected (400).
-- Muxing adds a small initial audio delay (~0.5s) to improve sync.
+- Muxing adds audio buffers (0.6s initial delay + 0.6s outro) to improve sync.
 - **wan-video/wan-2.2-s2v** is a speech-to-video model that requires audio input:
   - Cannot be used with `/jobs_prompt_only` endpoint (will return 400 error)
   - When used with `/jobs_prompt_tts`, the generated video already includes synced audio
@@ -138,5 +138,5 @@ Security
 - 401/403 from Replicate: check REPLICATE_API_TOKEN.
 - 401 from ElevenLabs: check ELEVEN_API_KEY and voice_id.
 - 403 from Supabase upload: ensure SUPABASE_SERVICE_ROLE is set and bucket exists.
-- Video/audio out of sync: verify seconds vs audio duration; muxing uses `-shortest` and 0.5s delay.
+- Video/audio out of sync: verify seconds vs audio duration; muxing uses `-shortest` and 0.6s delay + 0.6s outro buffer.
 

@@ -108,6 +108,14 @@ app.add_middleware(
 
 
 # ===== Models =====
+class UserContext(BaseModel):
+    """Authenticated user metadata forwarded by the studio frontend."""
+
+    id: str
+    email: str | None = None
+    name: str | None = None
+
+
 class JobPromptOnly(BaseModel):
     """Request body for generating a video directly from a prompt.
 
@@ -124,6 +132,7 @@ class JobPromptOnly(BaseModel):
     seconds: int = 6
     resolution: str = "768p"
     model: str | None = None
+    user_context: UserContext | None = None
 
 
 class JobPromptTTS(BaseModel):
@@ -150,6 +159,7 @@ class JobPromptTTS(BaseModel):
     seconds: int = 6
     resolution: str = "768p"
     model: str | None = None
+    user_context: UserContext | None = None
 
 
 class HeadRequest(BaseModel):
@@ -328,6 +338,35 @@ async def supabase_upload(
     return f"{PUBLIC_BASE}/{SUPABASE_BUCKET}/{object_path}?download=1"
 
 
+def resolve_user_storage_prefix(user_context: UserContext | None) -> str:
+    """Return a sanitized storage prefix for the provided user context."""
+
+    if not user_context:
+        return "anonymous"
+    try:
+        user_uuid = uuid.UUID(user_context.id)
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(400, "user_context.id must be a valid UUID") from exc
+    return f"users/{user_uuid}"  # uuid.UUID normalizes the string format
+
+
+def build_storage_key(prefix: str, category: str, extension: str) -> str:
+    """Construct a Supabase object key scoped to the user prefix."""
+
+    safe_prefix = prefix.strip("/") or "anonymous"
+    safe_prefix = safe_prefix.replace("..", "")
+    return f"{safe_prefix}/{category}/{uuid.uuid4()}.{extension}"
+
+
+async def fetch_binary(url: str, timeout: int = 300) -> bytes:
+    """Download binary content from a remote URL."""
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.content
+
+
 async def head_info(url: str) -> Tuple[int, str, int]:
     """Retrieve basic HTTP header information for a URL."""
 
@@ -483,6 +522,7 @@ async def list_supported_models():
 async def create_job_with_prompt(req: JobPromptOnly):
     """Generate a video from a static image and text prompt."""
     model = req.model or DEFAULT_MODEL
+    prefix = resolve_user_storage_prefix(req.user_context)
 
     # Validate that speech-to-video models are not used for prompt-only requests
     if model == "wan-video/wan-2.2-s2v":
@@ -499,7 +539,10 @@ async def create_job_with_prompt(req: JobPromptOnly):
         req.seconds,
         req.resolution,
     )
-    return {"video_url": video_url}
+    video_bytes = await fetch_binary(video_url)
+    final_key = build_storage_key(prefix, "videos", "mp4")
+    final_url = await supabase_upload(video_bytes, final_key, "video/mp4")
+    return {"video_url": video_url, "final_url": final_url}
 
 
 @app.post("/jobs_prompt_tts")
@@ -513,10 +556,11 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
         4. For other models, mux the audio and video together and store the final file.
     """
     model = req.model or DEFAULT_MODEL
+    prefix = resolve_user_storage_prefix(req.user_context)
 
     mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
-    key = f"audio/{uuid.uuid4()}.mp3"
-    audio_public_url = await supabase_upload(mp3_bytes, key, "audio/mpeg")
+    audio_key = build_storage_key(prefix, "audio", "mp3")
+    audio_public_url = await supabase_upload(mp3_bytes, audio_key, "audio/mpeg")
 
     # For speech-to-video models like Wan, pass the audio URL to the model
     if model == "wan-video/wan-2.2-s2v":
@@ -529,10 +573,13 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
             audio_public_url,
         )
         # For speech-to-video models, the video already has synced audio
+        final_key = build_storage_key(prefix, "videos", "mp4")
+        final_bytes = await fetch_binary(video_url)
+        final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
         return {
             "audio_url": audio_public_url,
             "video_url": video_url,
-            "final_url": video_url,  # No need to mux, already synced
+            "final_url": final_url,
         }
     else:
         # For other models, generate video separately and mux with audio
@@ -545,7 +592,7 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
         )
 
         final_bytes = await mux_video_audio(video_url, audio_public_url)
-        final_key = f"videos/{uuid.uuid4()}.mp4"
+        final_key = build_storage_key(prefix, "videos", "mp4")
         final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
 
         return {

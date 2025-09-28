@@ -10,6 +10,7 @@ import uuid
 import tempfile
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from typing import Tuple
 
 import httpx
@@ -338,6 +339,76 @@ async def supabase_upload(
     return f"{PUBLIC_BASE}/{SUPABASE_BUCKET}/{object_path}?download=1"
 
 
+async def supabase_delete(object_path: str) -> None:
+    """Best-effort delete of a Supabase Storage object."""
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE or not object_path:
+        return
+
+    delete_url = f"{UPLOAD_BASE}/{SUPABASE_BUCKET}/{object_path}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "apikey": SUPABASE_SERVICE_ROLE,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.delete(delete_url, headers=headers)
+    except httpx.HTTPError:
+        # Cleanup should not mask the originating exception.
+        return
+
+
+async def insert_pet_video(
+    *,
+    user_id: str | None,
+    video_url: str,
+    storage_key: str,
+    image_url: str,
+    script: str | None,
+    prompt: str,
+    voice_id: str | None,
+    resolution: str,
+    duration: int,
+    created_at: datetime | None = None,
+) -> None:
+    """Persist a generated pet video record via Supabase PostgREST."""
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+        raise HTTPException(500, "Supabase env not set")
+
+    created_at = created_at or datetime.now(timezone.utc)
+
+    endpoint = f"{SUPABASE_URL}/rest/v1/pet_videos"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "apikey": SUPABASE_SERVICE_ROLE,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    payload = {
+        "user_id": user_id,
+        "video_url": video_url,
+        "storage_key": storage_key,
+        "image_url": image_url,
+        "script": script,
+        "prompt": prompt,
+        "voice_id": voice_id,
+        "resolution": resolution,
+        "duration": duration,
+        "created_at": created_at.isoformat(),
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(endpoint, headers=headers, json=payload)
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            response.status_code,
+            f"Supabase metadata insert failed: {response.text}",
+        )
+
+
 def resolve_user_storage_prefix(user_context: UserContext | None) -> str:
     """Return a sanitized storage prefix for the provided user context."""
 
@@ -523,6 +594,7 @@ async def create_job_with_prompt(req: JobPromptOnly):
     """Generate a video from a static image and text prompt."""
     model = req.model or DEFAULT_MODEL
     prefix = resolve_user_storage_prefix(req.user_context)
+    user_id = req.user_context.id if req.user_context else None
 
     # Validate that speech-to-video models are not used for prompt-only requests
     if model == "wan-video/wan-2.2-s2v":
@@ -542,6 +614,23 @@ async def create_job_with_prompt(req: JobPromptOnly):
     video_bytes = await fetch_binary(video_url)
     final_key = build_storage_key(prefix, "videos", "mp4")
     final_url = await supabase_upload(video_bytes, final_key, "video/mp4")
+
+    try:
+        await insert_pet_video(
+            user_id=user_id,
+            video_url=final_url,
+            storage_key=final_key,
+            image_url=req.image_url,
+            script=None,
+            prompt=req.prompt,
+            voice_id=None,
+            resolution=req.resolution,
+            duration=req.seconds,
+        )
+    except Exception:
+        await supabase_delete(final_key)
+        raise
+
     return {"video_url": video_url, "final_url": final_url}
 
 
@@ -557,49 +646,67 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
     """
     model = req.model or DEFAULT_MODEL
     prefix = resolve_user_storage_prefix(req.user_context)
+    user_id = req.user_context.id if req.user_context else None
 
     mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
     audio_key = build_storage_key(prefix, "audio", "mp3")
     audio_public_url = await supabase_upload(mp3_bytes, audio_key, "audio/mpeg")
 
-    # For speech-to-video models like Wan, pass the audio URL to the model
-    if model == "wan-video/wan-2.2-s2v":
-        video_url = await generate_video_from_prompt(
-            model,
-            req.image_url,
-            req.prompt,
-            req.seconds,
-            req.resolution,
-            audio_public_url,
-        )
-        # For speech-to-video models, the video already has synced audio
-        final_key = build_storage_key(prefix, "videos", "mp4")
-        final_bytes = await fetch_binary(video_url)
-        final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
-        return {
-            "audio_url": audio_public_url,
-            "video_url": video_url,
-            "final_url": final_url,
-        }
-    else:
-        # For other models, generate video separately and mux with audio
-        video_url = await generate_video_from_prompt(
-            model,
-            req.image_url,
-            req.prompt,
-            req.seconds,
-            req.resolution,
-        )
+    final_key: str | None = None
+    final_url: str | None = None
+    video_url: str | None = None
 
-        final_bytes = await mux_video_audio(video_url, audio_public_url)
-        final_key = build_storage_key(prefix, "videos", "mp4")
-        final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
+    try:
+        # For speech-to-video models like Wan, pass the audio URL to the model
+        if model == "wan-video/wan-2.2-s2v":
+            video_url = await generate_video_from_prompt(
+                model,
+                req.image_url,
+                req.prompt,
+                req.seconds,
+                req.resolution,
+                audio_public_url,
+            )
+            # For speech-to-video models, the video already has synced audio
+            final_key = build_storage_key(prefix, "videos", "mp4")
+            final_bytes = await fetch_binary(video_url)
+            final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
+        else:
+            # For other models, generate video separately and mux with audio
+            video_url = await generate_video_from_prompt(
+                model,
+                req.image_url,
+                req.prompt,
+                req.seconds,
+                req.resolution,
+            )
 
-        return {
-            "audio_url": audio_public_url,
-            "video_url": video_url,
-            "final_url": final_url,
-        }
+            final_bytes = await mux_video_audio(video_url, audio_public_url)
+            final_key = build_storage_key(prefix, "videos", "mp4")
+            final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
+
+        await insert_pet_video(
+            user_id=user_id,
+            video_url=final_url,
+            storage_key=final_key,
+            image_url=req.image_url,
+            script=req.text,
+            prompt=req.prompt,
+            voice_id=req.voice_id,
+            resolution=req.resolution,
+            duration=req.seconds,
+        )
+    except Exception:
+        if final_key:
+            await supabase_delete(final_key)
+        await supabase_delete(audio_key)
+        raise
+
+    return {
+        "audio_url": audio_public_url,
+        "video_url": video_url,
+        "final_url": final_url,
+    }
 
 
 # ===== Debug =====

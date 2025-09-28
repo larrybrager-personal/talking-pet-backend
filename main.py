@@ -363,7 +363,6 @@ async def insert_pet_video(
     *,
     user_id: str | None,
     video_url: str,
-    storage_key: str,
     image_url: str,
     script: str | None,
     prompt: str,
@@ -372,7 +371,11 @@ async def insert_pet_video(
     duration: int,
     created_at: datetime | None = None,
 ) -> None:
-    """Persist a generated pet video record via Supabase PostgREST."""
+    """Persist a generated pet video record via Supabase PostgREST.
+
+    Supabase's current schema omits the previous ``storage_key`` column, so we
+    only persist the public ``video_url`` alongside the other metadata fields.
+    """
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
         raise HTTPException(500, "Supabase env not set")
@@ -389,7 +392,6 @@ async def insert_pet_video(
     payload = {
         "user_id": user_id,
         "video_url": video_url,
-        "storage_key": storage_key,
         "image_url": image_url,
         "script": script,
         "prompt": prompt,
@@ -619,7 +621,6 @@ async def create_job_with_prompt(req: JobPromptOnly):
         await insert_pet_video(
             user_id=user_id,
             video_url=final_url,
-            storage_key=final_key,
             image_url=req.image_url,
             script=None,
             prompt=req.prompt,
@@ -688,7 +689,6 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
         await insert_pet_video(
             user_id=user_id,
             video_url=final_url,
-            storage_key=final_key,
             image_url=req.image_url,
             script=req.text,
             prompt=req.prompt,

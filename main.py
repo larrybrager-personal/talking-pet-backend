@@ -5,6 +5,7 @@ Minimal FastAPI backend (cleaned) for Talking Pet MVP
 """
 
 import os
+import secrets
 import time
 import uuid
 import tempfile
@@ -15,7 +16,7 @@ from typing import Tuple
 
 import httpx
 import imageio_ffmpeg
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -30,6 +31,15 @@ SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "pets")
 
 # Replicate configuration
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
+
+# API authentication toggle
+API_AUTH_ENABLED = os.getenv("API_AUTH_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
 
 # Supported i2v models configuration
 SUPPORTED_MODELS = {
@@ -106,6 +116,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ===== Auth =====
+async def require_auth(request: Request) -> None:
+    """Enforce bearer token authentication when enabled via configuration."""
+
+    if not API_AUTH_ENABLED:
+        return
+
+    if not API_AUTH_TOKEN:
+        raise HTTPException(
+            500,
+            "API authentication is enabled but API_AUTH_TOKEN is not configured.",
+        )
+
+    authorization = request.headers.get("authorization")
+    if not authorization:
+        raise HTTPException(401, "Missing Authorization header")
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(401, "Authorization header must be 'Bearer <token>'")
+
+    if not secrets.compare_digest(token, API_AUTH_TOKEN):
+        raise HTTPException(403, "Invalid API token")
 
 
 # ===== Models =====
@@ -574,13 +609,13 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
 
 # ===== Routes =====
 @app.get("/health")
-async def health():
+async def health(_: None = Depends(require_auth)):
     """Simple health check used by deployment platforms."""
     return {"ok": True}
 
 
 @app.get("/models")
-async def list_supported_models():
+async def list_supported_models(_: None = Depends(require_auth)):
     """List all supported i2v models and their configurations."""
     models = {}
     for model_id, config in SUPPORTED_MODELS.items():
@@ -592,7 +627,9 @@ async def list_supported_models():
 
 
 @app.post("/jobs_prompt_only")
-async def create_job_with_prompt(req: JobPromptOnly):
+async def create_job_with_prompt(
+    req: JobPromptOnly, _: None = Depends(require_auth)
+):
     """Generate a video from a static image and text prompt."""
     model = req.model or DEFAULT_MODEL
     prefix = resolve_user_storage_prefix(req.user_context)
@@ -636,7 +673,9 @@ async def create_job_with_prompt(req: JobPromptOnly):
 
 
 @app.post("/jobs_prompt_tts")
-async def create_job_with_prompt_and_tts(req: JobPromptTTS):
+async def create_job_with_prompt_and_tts(
+    req: JobPromptTTS, _: None = Depends(require_auth)
+):
     """Generate a video with synchronized speech.
 
     Steps:
@@ -711,7 +750,7 @@ async def create_job_with_prompt_and_tts(req: JobPromptTTS):
 
 # ===== Debug =====
 @app.post("/debug/head")
-async def debug_head(req: HeadRequest):
+async def debug_head(req: HeadRequest, _: None = Depends(require_auth)):
     """Fetch metadata about a URL without downloading the entire file."""
     status, ctype, size = await head_info(req.url)
     return {"status": status, "content_type": ctype, "bytes": size}

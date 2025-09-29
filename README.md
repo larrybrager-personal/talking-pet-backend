@@ -41,6 +41,8 @@ The service expects the following environment variables (e.g., in a `.env` file)
 - ALLOWED_ORIGIN: CORS origin, `*` by default.
 - TTS_OUTPUT_FORMAT: ElevenLabs output format (default: `mp3_44100_64`).
 - TTS_MAX_CHARS: Max TTS input length (default: `600`).
+- API_AUTH_ENABLED: When `true`, require bearer token auth for all endpoints (default: `false`).
+- API_AUTH_TOKEN: Shared secret the frontend must send as a bearer token when auth is enabled.
 
 Tip (PowerShell):
 
@@ -113,6 +115,16 @@ Base URL: http://localhost:8000
 - POST /debug/head
   - Body: { "url": "https://example.com/file" }
   - Response: { "status": 200, "content_type": "image/jpeg", "bytes": 12345 }
+
+### Authentication
+
+When `API_AUTH_ENABLED` is `true`, every endpoint requires:
+
+```
+Authorization: Bearer <API_AUTH_TOKEN>
+```
+
+Set `API_AUTH_ENABLED=false` (or unset) to temporarily allow unauthenticated requests during integration testing.
 
 Notes
 - TTS requests longer than TTS_MAX_CHARS will be rejected (400).

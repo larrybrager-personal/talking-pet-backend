@@ -79,13 +79,16 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         payload = response.json()
-        wan = payload["supported_models"]["wan-video/wan-2.1"]
+        wan21 = payload["supported_models"]["wan-video/wan-2.1"]
+        wan22 = payload["supported_models"]["wan-video/wan-2.2-s2v"]
         hailuo = payload["supported_models"]["minimax/hailuo-02"]
         kling = payload["supported_models"]["kwaivgi/kling-v2.1"]
         seedance = payload["supported_models"]["bytedance/seedance-1-lite"]
 
-        self.assertTrue(wan["is_default"])
-        self.assertIn("1080p", wan["supported_resolutions"])
+        self.assertTrue(wan22["is_default"])
+        self.assertFalse(wan21["is_default"])
+        self.assertIn("1080p", wan22["supported_resolutions"])
+        self.assertIn("1080p", wan21["supported_resolutions"])
         self.assertIn("1080p", hailuo["supported_resolutions"])
         self.assertIn("1080p", kling["supported_resolutions"])
         self.assertIn("1080p", seedance["supported_resolutions"])
@@ -95,9 +98,9 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         payload = response.json()
-        self.assertEqual(payload["default_model"], "wan-video/wan-2.1")
+        self.assertEqual(payload["default_model"], "wan-video/wan-2.2-s2v")
         self.assertTrue(
-            payload["supported_models"]["wan-video/wan-2.1"]["is_default"]
+            payload["supported_models"]["wan-video/wan-2.2-s2v"]["is_default"]
         )
 
 

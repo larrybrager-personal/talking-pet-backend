@@ -74,13 +74,13 @@ Base URL: http://localhost:8000
 - GET /models
   - Response: { 
       "supported_models": {
-        "wan-video/wan-2.1": {"name": "Wan v2.1", "is_default": true},
+        "wan-video/wan-2.1": {"name": "Wan v2.1", "is_default": false},
         "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": false},
         "kwaivgi/kling-v2.1": {"name": "Kling v2.1", "is_default": false},
-        "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": false},
+        "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": true},
         "bytedance/seedance-1-lite": {"name": "SeeDance-1 Lite", "is_default": false}
       },
-      "default_model": "wan-video/wan-2.1"
+    "default_model": "wan-video/wan-2.2-s2v"
     }
 
 - POST /jobs_prompt_only
@@ -90,7 +90,7 @@ Base URL: http://localhost:8000
       "prompt": "The dog smiles and tilts its head",
       "seconds": 6,
       "resolution": "768p",
-      "model": "kwaivgi/kling-v2.1" // optional; defaults to Wan v2.1
+      "model": "kwaivgi/kling-v2.1" // optional; prompt-only requests fall back to Wan v2.1
     }
   - Response: { "video_url": "https://.../video.mp4" }
   - Note: wan-video/wan-2.2-s2v cannot be used (requires audio)

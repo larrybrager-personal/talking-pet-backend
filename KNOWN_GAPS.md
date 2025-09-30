@@ -6,4 +6,5 @@
 - [ ] Reintroduce structured storage key persistence once the Supabase schema supports it to aid future asset lifecycle management.
 - [ ] Replace the shared secret auth toggle with Supabase JWT validation once frontend session plumbing is available.
 - [ ] Confirm Kling v2.1 1080p "pro" mode output quality and aspect ratio behavior across additional prompt presets when Replicate credits are available.
-- [ ] Run a live Wan v2.1 job to validate the `format=wan2.1` payload and supported resolutions once Replicate usage is available.
+- [ ] Run a live Wan v2.2 S2V job to validate guidance defaults, supported resolutions, and audio requirements once Replicate usage is available.
+- [ ] Re-evaluate the prompt-only flow now that the default model is speech-to-video and ensure the UX communicates the need to select a compatible model.

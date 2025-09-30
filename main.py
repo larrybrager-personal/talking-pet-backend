@@ -96,6 +96,7 @@ SUPPORTED_MODELS = {
             "resolution": "resolution",
             "audio_url": "audio",  # Speech-to-video model requires audio
         },
+        "supported_resolutions": ["768p", "1080p"],
     },
     "bytedance/seedance-1-lite": {
         "name": "SeeDance-1 Lite",
@@ -114,7 +115,10 @@ SUPPORTED_MODELS = {
 }
 
 # Default model
-DEFAULT_MODEL = "wan-video/wan-2.1"
+DEFAULT_MODEL = "wan-video/wan-2.2-s2v"
+# Prompt-only fallback model keeps non-audio flows working when the global default
+# requires speech-to-video inputs.
+PROMPT_ONLY_FALLBACK_MODEL = "wan-video/wan-2.1"
 
 # TTS tuning
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
@@ -653,7 +657,18 @@ async def create_job_with_prompt(
     req: JobPromptOnly, _: None = Depends(require_auth)
 ):
     """Generate a video from a static image and text prompt."""
-    model = req.model or DEFAULT_MODEL
+    requested_model = req.model or DEFAULT_MODEL
+    if requested_model == "wan-video/wan-2.2-s2v":
+        if req.model is None:
+            model = PROMPT_ONLY_FALLBACK_MODEL
+        else:
+            raise HTTPException(
+                400,
+                "wan-video/wan-2.2-s2v is a speech-to-video model that requires audio. "
+                "Use /jobs_prompt_tts endpoint instead.",
+            )
+    else:
+        model = requested_model
     prefix = resolve_user_storage_prefix(req.user_context)
     user_id = req.user_context.id if req.user_context else None
 

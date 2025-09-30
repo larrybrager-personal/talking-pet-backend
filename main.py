@@ -56,6 +56,19 @@ SUPPORTED_MODELS = {
         },
         "supported_resolutions": ["512p", "768p", "1080p"],
     },
+    "wan-video/wan-2.1": {
+        "name": "Wan v2.1",
+        "default_params": {
+            "format": "wan2.1",
+        },
+        "param_mapping": {
+            "image_url": "image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "resolution",
+        },
+        "supported_resolutions": ["768p", "1080p"],
+    },
     "kwaivgi/kling-v2.1": {
         "name": "Kling v2.1",
         "default_params": {
@@ -101,7 +114,7 @@ SUPPORTED_MODELS = {
 }
 
 # Default model
-DEFAULT_MODEL = "minimax/hailuo-02"
+DEFAULT_MODEL = "wan-video/wan-2.1"
 
 # TTS tuning
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")

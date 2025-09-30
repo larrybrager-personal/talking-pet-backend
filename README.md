@@ -4,10 +4,10 @@ Minimal FastAPI backend that turns a static pet photo and short script into an a
 
 - ElevenLabs TTS → audio (MP3)
 - Multiple Replicate i2v models → animation (MP4) from image + prompt
-  - Hailuo-02 (default)
-  - Kling v2.1
-  - Wan v2.2
-  - SeeDance-1 Lite
+- Wan v2.1 (default)
+- Kling v2.1
+- Wan v2.2
+- SeeDance-1 Lite
 - Supabase Storage → persists and serves public media URLs
 - Optional muxing → combines generated video + speech into final MP4
 
@@ -74,12 +74,13 @@ Base URL: http://localhost:8000
 - GET /models
   - Response: { 
       "supported_models": {
-        "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": true},
+        "wan-video/wan-2.1": {"name": "Wan v2.1", "is_default": true},
+        "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": false},
         "kwaivgi/kling-v2.1": {"name": "Kling v2.1", "is_default": false},
         "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": false},
         "bytedance/seedance-1-lite": {"name": "SeeDance-1 Lite", "is_default": false}
       },
-      "default_model": "minimax/hailuo-02"
+      "default_model": "wan-video/wan-2.1"
     }
 
 - POST /jobs_prompt_only
@@ -89,7 +90,7 @@ Base URL: http://localhost:8000
       "prompt": "The dog smiles and tilts its head",
       "seconds": 6,
       "resolution": "768p",
-      "model": "kwaivgi/kling-v2.1" // optional; defaults to Hailuo-02
+      "model": "kwaivgi/kling-v2.1" // optional; defaults to Wan v2.1
     }
   - Response: { "video_url": "https://.../video.mp4" }
   - Note: wan-video/wan-2.2-s2v cannot be used (requires audio)

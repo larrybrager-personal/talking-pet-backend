@@ -33,12 +33,13 @@ List supported i2v models.
   ```json
   {
     "supported_models": {
-      "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": true},
+      "wan-video/wan-2.1": {"name": "Wan v2.1", "is_default": true},
+      "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": false},
       "kwaivgi/kling-v2.1": {"name": "Kling v2.1", "is_default": false},
       "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": false},
       "bytedance/seedance-1-lite": {"name": "SeeDance-1 Lite", "is_default": false}
     },
-    "default_model": "minimax/hailuo-02"
+    "default_model": "wan-video/wan-2.1"
   }
   ```
 

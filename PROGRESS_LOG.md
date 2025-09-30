@@ -1,10 +1,11 @@
 # Change Log
 
 ## Current Update
-- Surfaced 1080p support for Replicate models in both request payloads and the `/models` metadata response so the frontend can target higher resolutions reliably.
-- Added unit coverage ensuring Kling pro mode toggles for 1080p and that supported resolutions include the new option.
+- Switched the default image-to-video model to Wan v2.1, ensured the Replicate payload carries the `wan2.1` format flag, and verified Hailuo can still be targeted explicitly.
 
 ## Previous Updates
+- Surfaced 1080p support for Replicate models in both request payloads and the `/models` metadata response so the frontend can target higher resolutions reliably.
+- Added unit coverage ensuring Kling pro mode toggles for 1080p and that supported resolutions include the new option.
 - Added an opt-in bearer token auth guard that protects every endpoint when `API_AUTH_ENABLED=true`.
 - Documented the new auth environment variables and introduced unit coverage for the guard logic.
 - Updated Supabase metadata persistence to drop the deprecated `storage_key` field and rely on the public `video_url`, avoiding schema mismatches.

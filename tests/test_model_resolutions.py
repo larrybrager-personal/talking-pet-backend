@@ -6,6 +6,18 @@ import main
 
 
 class BuildModelPayloadResolutionTestCase(unittest.TestCase):
+    def test_wan21_sets_wan_format_and_respects_resolution(self):
+        payload = main.build_model_payload(
+            "wan-video/wan-2.1",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=6,
+            resolution="1080p",
+        )
+
+        self.assertEqual(payload["input"]["format"], "wan2.1")
+        self.assertEqual(payload["input"]["resolution"], "1080p")
+
     def test_hailuo_passes_1080p_resolution(self):
         payload = main.build_model_payload(
             "minimax/hailuo-02",
@@ -67,13 +79,26 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         payload = response.json()
+        wan = payload["supported_models"]["wan-video/wan-2.1"]
         hailuo = payload["supported_models"]["minimax/hailuo-02"]
         kling = payload["supported_models"]["kwaivgi/kling-v2.1"]
         seedance = payload["supported_models"]["bytedance/seedance-1-lite"]
 
+        self.assertTrue(wan["is_default"])
+        self.assertIn("1080p", wan["supported_resolutions"])
         self.assertIn("1080p", hailuo["supported_resolutions"])
         self.assertIn("1080p", kling["supported_resolutions"])
         self.assertIn("1080p", seedance["supported_resolutions"])
+
+    def test_models_endpoint_exposes_new_default(self):
+        response = self.client.get("/models")
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertEqual(payload["default_model"], "wan-video/wan-2.1")
+        self.assertTrue(
+            payload["supported_models"]["wan-video/wan-2.1"]["is_default"]
+        )
 
 
 if __name__ == "__main__":

@@ -428,12 +428,14 @@ async def insert_pet_video(
     voice_id: str | None,
     resolution: str,
     duration: int,
+    model: str,
     created_at: datetime | None = None,
 ) -> None:
     """Persist a generated pet video record via Supabase PostgREST.
 
     Supabase's current schema omits the previous ``storage_key`` column, so we
-    only persist the public ``video_url`` alongside the other metadata fields.
+    only persist the public ``video_url`` alongside the other metadata fields,
+    including the resolved Replicate ``model`` used for generation.
     """
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
@@ -457,6 +459,7 @@ async def insert_pet_video(
         "voice_id": voice_id,
         "resolution": resolution,
         "duration": duration,
+        "model": model,
         "created_at": created_at.isoformat(),
     }
 
@@ -701,6 +704,7 @@ async def create_job_with_prompt(
             voice_id=None,
             resolution=req.resolution,
             duration=req.seconds,
+            model=model,
         )
     except Exception:
         await supabase_delete(final_key)
@@ -771,6 +775,7 @@ async def create_job_with_prompt_and_tts(
             voice_id=req.voice_id,
             resolution=req.resolution,
             duration=req.seconds,
+            model=model,
         )
     except Exception:
         if final_key:

@@ -32,6 +32,7 @@ class InsertPetVideoHelperTest(unittest.IsolatedAsyncioTestCase):
                 voice_id="voice-id",
                 resolution="768p",
                 duration=6,
+                model="wan-video/wan-2.2-s2v",
                 created_at=created_at,
             )
 
@@ -57,6 +58,7 @@ class InsertPetVideoHelperTest(unittest.IsolatedAsyncioTestCase):
                 "voice_id": "voice-id",
                 "resolution": "768p",
                 "duration": 6,
+                "model": "wan-video/wan-2.2-s2v",
                 "created_at": created_at.isoformat(),
             },
         )
@@ -99,6 +101,7 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "voice_id": None,
                 "resolution": "768p",
                 "duration": 6,
+                "model": main.PROMPT_ONLY_FALLBACK_MODEL,
             },
         )
         self.assertEqual(
@@ -160,6 +163,7 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "voice_id": "voice-123",
                 "resolution": "768p",
                 "duration": 6,
+                "model": main.DEFAULT_MODEL,
             },
         )
         self.assertEqual(

@@ -54,6 +54,7 @@ SUPPORTED_MODELS = {
             "seconds": "duration",
             "resolution": "resolution",
         },
+        "supported_resolutions": ["512p", "768p", "1080p"],
     },
     "kwaivgi/kling-v2.1": {
         "name": "Kling v2.1",
@@ -67,6 +68,7 @@ SUPPORTED_MODELS = {
             "seconds": "duration",
             "resolution": "aspect_ratio",  # Kling uses aspect ratio
         },
+        "supported_resolutions": ["720p", "1080p"],
     },
     "wan-video/wan-2.2-s2v": {
         "name": "Wan v2.2",
@@ -94,6 +96,7 @@ SUPPORTED_MODELS = {
             "seconds": "duration",
             "resolution": "resolution",
         },
+        "supported_resolutions": ["480p", "720p", "1080p"],
     },
 }
 
@@ -273,11 +276,15 @@ def build_model_payload(
         # Handle special case for Kling which uses aspect ratio
         if model == "kwaivgi/kling-v2.1":
             # Convert resolution to aspect ratio for Kling
-            if resolution == "768p":
-                payload["input"][param_mapping["resolution"]] = "1:1"
+            payload["input"].setdefault("mode", "standard")
+            if resolution == "1080p":
+                payload["input"]["mode"] = "pro"
+                payload["input"][param_mapping["resolution"]] = "16:9"
             elif resolution == "1024p":
+                payload["input"]["mode"] = "standard"
                 payload["input"][param_mapping["resolution"]] = "16:9"
             else:
+                payload["input"]["mode"] = "standard"
                 payload["input"][param_mapping["resolution"]] = "1:1"
         elif model == "bytedance/seedance-1-lite":
             # SeeDance only accepts "480p", "720p", "1080p"
@@ -623,6 +630,8 @@ async def list_supported_models(_: None = Depends(require_auth)):
             "name": config["name"],
             "is_default": model_id == DEFAULT_MODEL,
         }
+        if "supported_resolutions" in config:
+            models[model_id]["supported_resolutions"] = config["supported_resolutions"]
     return {"supported_models": models, "default_model": DEFAULT_MODEL}
 
 

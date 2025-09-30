@@ -1,9 +1,10 @@
 # Change Log
 
 ## Current Update
-- Switched the default image-to-video model to Wan v2.1, ensured the Replicate payload carries the `wan2.1` format flag, and verified Hailuo can still be targeted explicitly.
+- Promoted Wan v2.2 S2V as the default image-to-video model across the API, documentation, and tests so new jobs target the higher-quality model by default.
 
 ## Previous Updates
+- Switched the default image-to-video model to Wan v2.1, ensured the Replicate payload carries the `wan2.1` format flag, and verified Hailuo can still be targeted explicitly.
 - Surfaced 1080p support for Replicate models in both request payloads and the `/models` metadata response so the frontend can target higher resolutions reliably.
 - Added unit coverage ensuring Kling pro mode toggles for 1080p and that supported resolutions include the new option.
 - Added an opt-in bearer token auth guard that protects every endpoint when `API_AUTH_ENABLED=true`.

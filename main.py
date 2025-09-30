@@ -54,7 +54,7 @@ SUPPORTED_MODELS = {
             "seconds": "duration",
             "resolution": "resolution",
         },
-        "supported_resolutions": ["480p", "720p", "768p", "1024p", "1080p"],
+        "supported_resolutions": ["512p", "768p", "1080p"],
     },
     "kwaivgi/kling-v2.1": {
         "name": "Kling v2.1",
@@ -68,7 +68,7 @@ SUPPORTED_MODELS = {
             "seconds": "duration",
             "resolution": "aspect_ratio",  # Kling uses aspect ratio
         },
-        "supported_resolutions": ["768p", "1024p", "1080p"],
+        "supported_resolutions": ["720p", "1080p"],
     },
     "wan-video/wan-2.2-s2v": {
         "name": "Wan v2.2",

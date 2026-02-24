@@ -9,3 +9,6 @@
   - Updated `/jobs_prompt_only` and `/jobs_prompt_tts` to support quality/fps/model_override/model_params and automatic routing.
 - Updated payload generation to merge safe, allowlisted model params and include fps when supported.
 - Expanded tests for routing behavior, `/resolve_model`, enriched `/models`, and model param allowlist handling.
+- Normalized frontend resolution aliases (`768p`/`1024p`) to backend-supported values (`720p`/`1080p`) during intent resolution and explicit model overrides to prevent Replicate 422 validation failures.
+- Updated Wan 2.6 model metadata to advertise supported resolutions (`720p`, `1080p`) and added tests covering resolution normalization paths.
+

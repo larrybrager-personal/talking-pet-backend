@@ -1,11 +1,8 @@
 # Known Gaps / Follow-Ups
 
-- [ ] Add integration coverage that exercises full Supabase upload + Replicate video persistence end-to-end once service mocks are available.
-- [ ] Confirm the Supabase `pet_videos` table includes the new `model` column and plan a backfill for historical records once deployed.
-- [ ] Investigate adding request correlation IDs to outbound Replicate and Supabase calls for improved observability.
-- [ ] Capture and surface Supabase cleanup failures so atomic rollback issues are observable in monitoring.
-- [ ] Reintroduce structured storage key persistence once the Supabase schema supports it to aid future asset lifecycle management.
-- [ ] Replace the shared secret auth toggle with Supabase JWT validation once frontend session plumbing is available.
-- [ ] Confirm Kling v2.1 1080p "pro" mode output quality and aspect ratio behavior across additional prompt presets when Replicate credits are available.
-- [ ] Run a live Wan v2.2 S2V job to validate guidance defaults, supported resolutions, and audio requirements once Replicate usage is available.
-- [ ] Re-evaluate the prompt-only flow now that the default model is speech-to-video and ensure the UX communicates the need to select a compatible model.
+- [ ] Verify the exact Replicate input schemas for all newly added slugs (`wan2.6`, `kling-v2.6`, `hailuo-2.3`, `seedance-1-pro*`) in a live environment and tune per-model payload adapters if fields differ.
+- [ ] Decide whether the frontend should expose all optional quality variants by default (`wan-2.6-i2v`, `seedance-1-pro`, `kling-v2.5-turbo-pro`) or keep a simplified curated subset.
+- [ ] Add persistence-time normalization for historical records that are read directly from DB in future analytics/reporting paths.
+- [ ] Add integration coverage for model normalization + submission flow against mocked Replicate responses.
+- [ ] Add request IDs and structured metrics around model routing decisions and normalization hits for observability.
+- [ ] Run a manual smoke test for prompt-only and prompt+tts across at least one model in each tier once Replicate credits are available.

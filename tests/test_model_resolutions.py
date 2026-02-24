@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -46,6 +47,7 @@ class BuildModelPayloadResolutionTestCase(unittest.TestCase):
             prompt="hello",
             seconds=6,
             resolution="1080p",
+            input_params={"mode": "standard"},
         )
 
         self.assertEqual(payload["input"]["mode"], "pro")
@@ -93,6 +95,43 @@ class ModelNormalizationTestCase(unittest.TestCase):
         self.assertEqual(main.get_default_video_model(), "wan-video/wan2.6-i2v-flash")
 
 
+class RoutingResolutionTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_quality_routing_respects_plan_gating(self):
+        with patch(
+            "model_routing.resolve_plan_tier", new_callable=AsyncMock
+        ) as mock_tier:
+            mock_tier.return_value = "free"
+            free_result = await main.resolve_model_for_intent(
+                {
+                    "seconds": 9,
+                    "resolution": "1080p",
+                    "quality": "quality",
+                    "fps": 30,
+                    "has_audio": False,
+                    "user_context": None,
+                }
+            )
+            self.assertEqual(
+                free_result["resolved_model_slug"], "wan-video/wan2.6-i2v-flash"
+            )
+            self.assertEqual(free_result["resolved"]["seconds"], 6)
+            self.assertEqual(free_result["resolved"]["fps"], 30)
+
+            mock_tier.return_value = "studio"
+            studio_result = await main.resolve_model_for_intent(
+                {
+                    "seconds": 9,
+                    "resolution": "1080p",
+                    "quality": "quality",
+                    "fps": 30,
+                    "has_audio": False,
+                    "user_context": None,
+                }
+            )
+            self.assertEqual(studio_result["resolved_model_slug"], "kwaivgi/kling-v2.6")
+            self.assertIsNone(studio_result["resolved"]["fps"])
+
+
 class ModelsEndpointResolutionTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._auth_enabled = main.API_AUTH_ENABLED
@@ -102,25 +141,19 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         main.API_AUTH_ENABLED = self._auth_enabled
 
-    def test_supported_models_expose_resolutions_and_tiers(self):
+    def test_supported_models_expose_enriched_metadata(self):
         response = self.client.get("/models")
         self.assertEqual(response.status_code, 200)
 
         payload = response.json()
         wan26_fast = payload["supported_models"]["wan-video/wan2.6-i2v-flash"]
-        wan22 = payload["supported_models"]["wan-video/wan-2.2-s2v"]
-        hailuo = payload["supported_models"]["minimax/hailuo-2.3"]
-        kling = payload["supported_models"]["kwaivgi/kling-v2.6"]
-        seedance = payload["supported_models"]["bytedance/seedance-1-pro-fast"]
 
         self.assertTrue(wan26_fast["is_default"])
         self.assertEqual(wan26_fast["tier"], "fast")
-        self.assertEqual(wan22["tier"], "legacy")
-        self.assertIn("1080p", wan22["supported_resolutions"])
-        self.assertIn("1080p", wan26_fast["supported_resolutions"])
-        self.assertIn("1080p", hailuo["supported_resolutions"])
-        self.assertIn("1080p", kling["supported_resolutions"])
-        self.assertIn("1080p", seedance["supported_resolutions"])
+        self.assertIn("supported_durations", wan26_fast)
+        self.assertIn("supported_fps", wan26_fast)
+        self.assertIn("blurb", wan26_fast)
+        self.assertIn("tunable_params", wan26_fast)
 
     def test_models_endpoint_exposes_new_default(self):
         response = self.client.get("/models")
@@ -128,9 +161,33 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
 
         payload = response.json()
         self.assertEqual(payload["default_model"], "wan-video/wan2.6-i2v-flash")
-        self.assertTrue(
-            payload["supported_models"]["wan-video/wan2.6-i2v-flash"]["is_default"]
-        )
+
+    def test_resolve_model_endpoint_shape_and_normalization(self):
+        with patch(
+            "model_routing.resolve_plan_tier", new_callable=AsyncMock
+        ) as mock_tier:
+            mock_tier.return_value = "free"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 9,
+                    "resolution": "1080p",
+                    "quality": "quality",
+                    "fps": 60,
+                    "has_audio": False,
+                    "model_override": None,
+                    "model_params": None,
+                    "user_context": None,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("model", payload)
+        self.assertIn("meta", payload)
+        self.assertIn("resolved", payload)
+        self.assertEqual(payload["resolved"]["seconds"], 6)
+        self.assertIsNone(payload["resolved"]["fps"])
 
 
 if __name__ == "__main__":

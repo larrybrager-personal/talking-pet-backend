@@ -96,9 +96,9 @@ def _normalize_resolution(model_slug: str, resolution: str) -> str:
         return resolution
     if resolution in supported:
         return resolution
-    if resolution == "1024p" and "1080p" in supported:
+    if resolution in {"1024p", "1080p"} and "1080p" in supported:
         return "1080p"
-    if resolution == "768p" and "720p" in supported:
+    if resolution in {"768p", "720p"} and "720p" in supported:
         return "720p"
     return supported[0]
 

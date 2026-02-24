@@ -131,6 +131,25 @@ class RoutingResolutionTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(studio_result["resolved_model_slug"], "kwaivgi/kling-v2.6")
             self.assertIsNone(studio_result["resolved"]["fps"])
 
+    async def test_resolution_normalizes_to_supported_backend_values(self):
+        with patch(
+            "model_routing.resolve_plan_tier", new_callable=AsyncMock
+        ) as mock_tier:
+            mock_tier.return_value = "free"
+            result = await main.resolve_model_for_intent(
+                {
+                    "seconds": 6,
+                    "resolution": "768p",
+                    "quality": "fast",
+                    "fps": 24,
+                    "has_audio": False,
+                    "user_context": None,
+                }
+            )
+
+        self.assertEqual(result["resolved_model_slug"], "wan-video/wan2.6-i2v-flash")
+        self.assertEqual(result["resolved"]["resolution"], "720p")
+
 
 class ModelsEndpointResolutionTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -161,6 +180,25 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
 
         payload = response.json()
         self.assertEqual(payload["default_model"], "wan-video/wan2.6-i2v-flash")
+
+    def test_override_model_normalizes_resolution_for_backend(self):
+        response = self.client.post(
+            "/resolve_model",
+            json={
+                "seconds": 6,
+                "resolution": "768p",
+                "quality": "fast",
+                "fps": 24,
+                "has_audio": False,
+                "model_override": "wan-video/wan2.6-i2v-flash",
+                "model_params": None,
+                "user_context": None,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["resolved"]["resolution"], "720p")
 
     def test_resolve_model_endpoint_shape_and_normalization(self):
         with patch(

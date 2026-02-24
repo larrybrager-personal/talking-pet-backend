@@ -626,6 +626,17 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             resolved_seconds = (
                 max(lower_or_equal) if lower_or_equal else min(supported_durations)
             )
+        supported_resolutions = config.get("supported_resolutions", [])
+        if req.resolution in supported_resolutions:
+            resolved_resolution = req.resolution
+        elif req.resolution in {"768p", "720p"} and "720p" in supported_resolutions:
+            resolved_resolution = "720p"
+        elif req.resolution in {"1024p", "1080p"} and "1080p" in supported_resolutions:
+            resolved_resolution = "1080p"
+        else:
+            resolved_resolution = (
+                supported_resolutions[0] if supported_resolutions else req.resolution
+            )
         resolved_fps = req.fps if req.fps in config.get("supported_fps", []) else None
         meta = {
             "name": config["name"],
@@ -643,7 +654,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             "resolved": {
                 "seconds": resolved_seconds,
                 "fps": resolved_fps,
-                "resolution": req.resolution,
+                "resolution": resolved_resolution,
                 "quality": req.quality,
             },
         }
@@ -672,10 +683,21 @@ async def _resolve_job_model(
     if override:
         chosen = normalize_video_model(override)
         config = get_model_config(chosen)
+        supported_resolutions = config.get("supported_resolutions", [])
+        if resolution in supported_resolutions:
+            resolved_resolution = resolution
+        elif resolution in {"768p", "720p"} and "720p" in supported_resolutions:
+            resolved_resolution = "720p"
+        elif resolution in {"1024p", "1080p"} and "1080p" in supported_resolutions:
+            resolved_resolution = "1080p"
+        else:
+            resolved_resolution = (
+                supported_resolutions[0] if supported_resolutions else resolution
+            )
         resolved = {
             "seconds": seconds,
             "fps": fps if fps in config.get("supported_fps", []) else None,
-            "resolution": resolution,
+            "resolution": resolved_resolution,
             "quality": quality,
         }
     else:

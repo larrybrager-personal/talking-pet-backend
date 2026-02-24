@@ -180,5 +180,36 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class ModelParamsAllowlistTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_model_params_are_ignored(self):
+        req = main.JobPromptOnly(
+            image_url="https://example.com/pet.jpg",
+            prompt="Say hi",
+            seconds=6,
+            resolution="768p",
+            model_override="wan-video/wan2.6-i2v-flash",
+            model_params={"fps": 30, "unknown": "ignore-me"},
+            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000"),
+        )
+
+        with (
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch("main.build_storage_key", return_value="videos/final.mp4"),
+            patch("main.insert_pet_video", new_callable=AsyncMock),
+        ):
+            mock_generate.return_value = "https://model/video.mp4"
+            mock_fetch.return_value = b"video-bytes"
+            mock_upload.return_value = "https://public.final/video.mp4"
+
+            await main.create_job_with_prompt(req)
+
+        generate_kwargs = mock_generate.await_args.kwargs
+        self.assertEqual(generate_kwargs["input_params"], {"fps": 30})
+
+
 if __name__ == "__main__":
     unittest.main()

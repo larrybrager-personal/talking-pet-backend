@@ -12,13 +12,25 @@ import tempfile
 import shutil
 import subprocess
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Any, Literal, Tuple
 
 import httpx
-import imageio_ffmpeg
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from model_registry import (
+    DEFAULT_MODEL,
+    PROMPT_ONLY_FALLBACK_MODEL,
+    SUPPORTED_MODELS,
+    VIDEO_MODEL_ROUTES,
+)
+from model_routing import (
+    apply_allowed_model_params,
+    get_default_video_model,
+    normalize_video_model,
+    resolve_model_for_intent,
+)
 
 # ===== Environment =====
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY", "")
@@ -40,221 +52,6 @@ API_AUTH_ENABLED = os.getenv("API_AUTH_ENABLED", "false").strip().lower() in {
     "on",
 }
 API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
-
-# Replicate model routing tiers and legacy model normalization.
-VIDEO_MODEL_ROUTES = {
-    "fast": "wan-video/wan2.6-i2v-flash",
-    "premium": "kwaivgi/kling-v2.6",
-    "budget": "bytedance/seedance-1-pro-fast",
-    "legacyFallback": "wan-video/wan-2.2-s2v",
-}
-
-LEGACY_MODEL_ALIASES = {
-    "minimax/hailuo-02": "minimax/hailuo-2.3",
-    "kwaivgi/kling-v2.1": "kwaivgi/kling-v2.6",
-    "bytedance/seedance-1-lite": "bytedance/seedance-1-pro-fast",
-    "wan-video/wan-2.1": "wan-video/wan2.6-i2v-flash",
-}
-
-# Supported i2v models configuration
-SUPPORTED_MODELS = {
-    "wan-video/wan2.6-i2v-flash": {
-        "name": "Wan 2.6 I2V Flash",
-        "tier": "fast",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": True,
-            "generatesAudio": False,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {},
-        "param_mapping": {
-            "image_url": "image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "resolution",
-            "audio_url": "audio",
-        },
-        "supported_resolutions": ["768p", "1080p"],
-    },
-    "wan-video/wan-2.6-i2v": {
-        "name": "Wan 2.6 I2V",
-        "tier": "premium",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": True,
-            "generatesAudio": False,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {},
-        "param_mapping": {
-            "image_url": "image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "resolution",
-            "audio_url": "audio",
-        },
-        "supported_resolutions": ["768p", "1080p"],
-    },
-    "minimax/hailuo-2.3": {
-        "name": "Hailuo 2.3",
-        "tier": "premium",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": False,
-            "generatesAudio": False,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {
-            "prompt_optimizer": False,
-        },
-        "param_mapping": {
-            "image_url": "first_frame_image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "resolution",
-        },
-        "supported_resolutions": ["512p", "768p", "1080p"],
-    },
-    "minimax/hailuo-2.3-fast": {
-        "name": "Hailuo 2.3 Fast",
-        "tier": "budget",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": False,
-            "generatesAudio": False,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {
-            "prompt_optimizer": False,
-        },
-        "param_mapping": {
-            "image_url": "first_frame_image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "resolution",
-        },
-        "supported_resolutions": ["512p", "768p", "1080p"],
-    },
-    "kwaivgi/kling-v2.6": {
-        "name": "Kling v2.6",
-        "tier": "premium",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": False,
-            "generatesAudio": True,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {
-            "mode": "standard",
-            "aspect_ratio": "1:1",
-        },
-        "param_mapping": {
-            "image_url": "start_image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "aspect_ratio",  # Kling uses aspect ratio
-        },
-        "supported_resolutions": ["720p", "1080p"],
-    },
-    "kwaivgi/kling-v2.5-turbo-pro": {
-        "name": "Kling v2.5 Turbo Pro",
-        "tier": "fast",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": False,
-            "generatesAudio": True,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {
-            "mode": "standard",
-            "aspect_ratio": "1:1",
-        },
-        "param_mapping": {
-            "image_url": "start_image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "aspect_ratio",
-        },
-        "supported_resolutions": ["720p", "1080p"],
-    },
-    "wan-video/wan-2.2-s2v": {
-        "name": "Wan v2.2 S2V",
-        "tier": "legacy",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": True,
-            "generatesAudio": True,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {
-            "guidance_scale": 7.5,
-            "num_inference_steps": 25,
-        },
-        "param_mapping": {
-            "image_url": "image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "resolution",
-            "audio_url": "audio",  # Speech-to-video model requires audio
-        },
-        "supported_resolutions": ["768p", "1080p"],
-    },
-    "bytedance/seedance-1-pro-fast": {
-        "name": "SeeDance-1 Pro Fast",
-        "tier": "budget",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": False,
-            "generatesAudio": False,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {
-            "guidance_scale": 7.5,
-            "num_inference_steps": 20,
-        },
-        "param_mapping": {
-            "image_url": "image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "resolution",
-        },
-        "supported_resolutions": ["480p", "720p", "1080p"],
-    },
-    "bytedance/seedance-1-pro": {
-        "name": "SeeDance-1 Pro",
-        "tier": "premium",
-        "capabilities": {
-            "supportsImageToVideo": True,
-            "supportsTextToVideo": False,
-            "supportsAudioIn": False,
-            "generatesAudio": False,
-            "maxDurationSeconds": 10,
-        },
-        "default_params": {
-            "guidance_scale": 7.5,
-            "num_inference_steps": 25,
-        },
-        "param_mapping": {
-            "image_url": "image",
-            "prompt": "prompt",
-            "seconds": "duration",
-            "resolution": "resolution",
-        },
-        "supported_resolutions": ["480p", "720p", "1080p"],
-    },
-}
-
-DEFAULT_MODEL = VIDEO_MODEL_ROUTES["fast"]
-PROMPT_ONLY_FALLBACK_MODEL = DEFAULT_MODEL
 
 # TTS tuning
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
@@ -306,6 +103,20 @@ class UserContext(BaseModel):
     id: str
     email: str | None = None
     name: str | None = None
+    plan_tier: str | None = None
+
+
+class ModelIntentRequest(BaseModel):
+    """High-level model routing intent used by automatic backend selection."""
+
+    seconds: int = 6
+    resolution: str = "768p"
+    quality: Literal["fast", "balanced", "cheap", "quality"] = "fast"
+    fps: int | None = None
+    has_audio: bool = False
+    model_override: str | None = None
+    model_params: dict[str, Any] | None = None
+    user_context: UserContext | None = None
 
 
 class JobPromptOnly(BaseModel):
@@ -323,7 +134,11 @@ class JobPromptOnly(BaseModel):
     prompt: str
     seconds: int = 6
     resolution: str = "768p"
+    quality: Literal["fast", "balanced", "cheap", "quality"] = "fast"
+    fps: int | None = None
     model: str | None = None
+    model_override: str | None = None
+    model_params: dict[str, Any] | None = None
     user_context: UserContext | None = None
 
 
@@ -350,7 +165,11 @@ class JobPromptTTS(BaseModel):
     voice_id: str
     seconds: int = 6
     resolution: str = "768p"
+    quality: Literal["fast", "balanced", "cheap", "quality"] = "fast"
+    fps: int | None = None
     model: str | None = None
+    model_override: str | None = None
+    model_params: dict[str, Any] | None = None
     user_context: UserContext | None = None
 
 
@@ -360,24 +179,15 @@ class HeadRequest(BaseModel):
     url: str
 
 
+def to_model_dict(model: BaseModel) -> dict[str, Any]:
+    """Compat helper for pydantic v1/v2 model serialization."""
+
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
 # ===== Helpers =====
-def normalize_video_model(model: str | None) -> str:
-    """Normalize legacy or unknown model ids to a supported model slug."""
-
-    if not model:
-        return DEFAULT_MODEL
-    normalized = LEGACY_MODEL_ALIASES.get(model, model)
-    if normalized in SUPPORTED_MODELS:
-        return normalized
-    return DEFAULT_MODEL
-
-
-def get_default_video_model(mode: str = "fast") -> str:
-    """Return default model slug for a routing mode, falling back to fast."""
-
-    return VIDEO_MODEL_ROUTES.get(mode, VIDEO_MODEL_ROUTES["fast"])
-
-
 def get_model_config(model: str) -> dict:
     """Get configuration for a supported model.
 
@@ -406,75 +216,48 @@ def build_model_payload(
     seconds: int,
     resolution: str,
     audio_url: str = None,
+    fps: int | None = None,
+    input_params: dict[str, Any] | None = None,
 ) -> dict:
-    """Build the payload for a specific model based on its parameter mapping.
+    """Build the payload for a specific model based on its parameter mapping."""
 
-    Args:
-        model: Model identifier
-        image_url: Input image URL
-        prompt: Text prompt
-        seconds: Duration in seconds
-        resolution: Target resolution or aspect ratio
-        audio_url: Audio URL for speech-to-video models (optional)
-
-    Returns:
-        Payload dictionary for the model
-    """
     config = get_model_config(model)
     param_mapping = config["param_mapping"]
-    default_params = config.get("default_params", {})
 
-    # Build payload using parameter mapping
-    payload = {"input": default_params.copy()}
+    payload = {"input": (input_params or {}).copy()}
 
-    # Map standard parameters to model-specific names
     if "image_url" in param_mapping:
         payload["input"][param_mapping["image_url"]] = image_url
     if "prompt" in param_mapping:
         payload["input"][param_mapping["prompt"]] = prompt
     if "seconds" in param_mapping:
-        # Handle special case for Kling which only accepts duration 5 or 10
         if model.startswith("kwaivgi/kling-"):
-            # Map seconds to valid Kling duration values
-            if seconds <= 5:
-                payload["input"][param_mapping["seconds"]] = 5
-            else:
-                payload["input"][param_mapping["seconds"]] = 10
+            payload["input"][param_mapping["seconds"]] = 5 if seconds <= 5 else 10
         else:
             payload["input"][param_mapping["seconds"]] = seconds
     if "resolution" in param_mapping:
-        # Handle special case for Kling which uses aspect ratio
         if model.startswith("kwaivgi/kling-"):
-            # Convert resolution to aspect ratio for Kling
             payload["input"].setdefault("mode", "standard")
             if resolution == "1080p":
                 payload["input"]["mode"] = "pro"
                 payload["input"][param_mapping["resolution"]] = "16:9"
             elif resolution == "1024p":
-                payload["input"]["mode"] = "standard"
                 payload["input"][param_mapping["resolution"]] = "16:9"
             else:
-                payload["input"]["mode"] = "standard"
                 payload["input"][param_mapping["resolution"]] = "1:1"
         elif model.startswith("bytedance/seedance-1-"):
-            # SeeDance only accepts "480p", "720p", "1080p"
-            if resolution == "480p":
-                payload["input"][param_mapping["resolution"]] = "480p"
-            elif resolution == "720p":
-                payload["input"][param_mapping["resolution"]] = "720p"
-            elif resolution == "1080p":
-                payload["input"][param_mapping["resolution"]] = "1080p"
+            if resolution in {"480p", "720p", "1080p"}:
+                payload["input"][param_mapping["resolution"]] = resolution
             elif resolution == "1024p":
                 payload["input"][param_mapping["resolution"]] = "1080p"
-            elif resolution == "768p":
-                payload["input"][param_mapping["resolution"]] = "720p"
             else:
-                # Default to 720p for any other resolution
                 payload["input"][param_mapping["resolution"]] = "720p"
         else:
             payload["input"][param_mapping["resolution"]] = resolution
     if "audio_url" in param_mapping and audio_url:
         payload["input"][param_mapping["audio_url"]] = audio_url
+    if fps is not None and "fps" in param_mapping:
+        payload["input"][param_mapping["fps"]] = fps
 
     return payload
 
@@ -673,6 +456,8 @@ async def replicate_video_from_prompt(
     seconds: int,
     resolution: str,
     audio_url: str = None,
+    fps: int | None = None,
+    input_params: dict[str, Any] | None = None,
 ) -> str:
     """Create a video using a specified Replicate model."""
 
@@ -681,7 +466,7 @@ async def replicate_video_from_prompt(
 
     # Validate model and build payload
     payload = build_model_payload(
-        model, image_url, prompt, seconds, resolution, audio_url
+        model, image_url, prompt, seconds, resolution, audio_url, fps, input_params
     )
 
     headers = {
@@ -736,11 +521,13 @@ async def generate_video_from_prompt(
     seconds: int,
     resolution: str,
     audio_url: str = None,
+    fps: int | None = None,
+    input_params: dict[str, Any] | None = None,
 ) -> str:
     """Create a talking-pet style video using the specified Replicate model."""
 
     return await replicate_video_from_prompt(
-        model, image_url, prompt, seconds, resolution, audio_url
+        model, image_url, prompt, seconds, resolution, audio_url, fps, input_params
     )
 
 
@@ -761,6 +548,8 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
         ar.raise_for_status()
         with open(apath, "wb") as f:
             f.write(ar.content)
+
+    import imageio_ffmpeg
 
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [
@@ -796,17 +585,21 @@ async def health(_: None = Depends(require_auth)):
 
 @app.get("/models")
 async def list_supported_models(_: None = Depends(require_auth)):
-    """List all supported i2v models and their configurations."""
+    """List all supported i2v models and routing metadata."""
     models = {}
     for model_id, config in SUPPORTED_MODELS.items():
         models[model_id] = {
             "name": config["name"],
             "tier": config["tier"],
+            "quality_label": config["quality_label"],
+            "blurb": config["blurb"],
             "capabilities": config["capabilities"],
+            "tunable_params": config.get("tunable_params", []),
+            "supported_durations": config.get("supported_durations", []),
+            "supported_fps": config.get("supported_fps", []),
+            "supported_resolutions": config.get("supported_resolutions", []),
             "is_default": model_id == DEFAULT_MODEL,
         }
-        if "supported_resolutions" in config:
-            models[model_id]["supported_resolutions"] = config["supported_resolutions"]
     return {
         "supported_models": models,
         "default_model": DEFAULT_MODEL,
@@ -814,38 +607,132 @@ async def list_supported_models(_: None = Depends(require_auth)):
     }
 
 
-@app.post("/jobs_prompt_only")
-async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_auth)):
-    """Generate a video from a static image and text prompt."""
-    requested_model = normalize_video_model(req.model)
-    if requested_model == "wan-video/wan-2.2-s2v":
-        if req.model is None:
-            model = PROMPT_ONLY_FALLBACK_MODEL
-        else:
-            raise HTTPException(
-                400,
-                "wan-video/wan-2.2-s2v is a speech-to-video model that requires audio. "
-                "Use /jobs_prompt_tts endpoint instead.",
-            )
-    else:
-        model = requested_model
-    prefix = resolve_user_storage_prefix(req.user_context)
-    user_id = req.user_context.id if req.user_context else None
+@app.post("/resolve_model")
+async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)):
+    """Resolve model selection from high-level user intent."""
 
-    # Validate that speech-to-video models are not used for prompt-only requests
-    if model == "wan-video/wan-2.2-s2v":
+    override = req.model_override
+    intent = to_model_dict(req)
+
+    if override:
+        model = normalize_video_model(override)
+        config = get_model_config(model)
+        resolved_seconds = req.seconds
+        supported_durations = config.get("supported_durations", [])
+        if supported_durations:
+            lower_or_equal = [
+                value for value in supported_durations if value <= req.seconds
+            ]
+            resolved_seconds = (
+                max(lower_or_equal) if lower_or_equal else min(supported_durations)
+            )
+        resolved_fps = req.fps if req.fps in config.get("supported_fps", []) else None
+        meta = {
+            "name": config["name"],
+            "tier": config["tier"],
+            "quality_label": config["quality_label"],
+            "blurb": config["blurb"],
+            "supported_durations": config.get("supported_durations", []),
+            "supported_fps": config.get("supported_fps", []),
+            "supported_resolutions": config.get("supported_resolutions", []),
+            "tunable_params": config.get("tunable_params", []),
+        }
+        return {
+            "model": model,
+            "meta": meta,
+            "resolved": {
+                "seconds": resolved_seconds,
+                "fps": resolved_fps,
+                "resolution": req.resolution,
+                "quality": req.quality,
+            },
+        }
+
+    resolved = await resolve_model_for_intent(intent)
+    return {
+        "model": resolved["resolved_model_slug"],
+        "meta": resolved["resolved_meta"],
+        "resolved": resolved["resolved"],
+    }
+
+
+async def _resolve_job_model(
+    *,
+    seconds: int,
+    resolution: str,
+    quality: str,
+    fps: int | None,
+    has_audio: bool,
+    user_context: UserContext | None,
+    model: str | None,
+    model_override: str | None,
+    model_params: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    override = model_override or model
+    if override:
+        chosen = normalize_video_model(override)
+        config = get_model_config(chosen)
+        resolved = {
+            "seconds": seconds,
+            "fps": fps if fps in config.get("supported_fps", []) else None,
+            "resolution": resolution,
+            "quality": quality,
+        }
+    else:
+        result = await resolve_model_for_intent(
+            {
+                "seconds": seconds,
+                "resolution": resolution,
+                "quality": quality,
+                "fps": fps,
+                "has_audio": has_audio,
+                "user_context": to_model_dict(user_context) if user_context else None,
+            }
+        )
+        chosen = result["resolved_model_slug"]
+        config = get_model_config(chosen)
+        resolved = result["resolved"]
+
+    if not has_audio and chosen == "wan-video/wan-2.2-s2v":
         raise HTTPException(
             400,
             "wan-video/wan-2.2-s2v is a speech-to-video model that requires audio. "
             "Use /jobs_prompt_tts endpoint instead.",
         )
 
+    params = config.get("default_params", {}).copy()
+    params.update(apply_allowed_model_params(chosen, model_params))
+    if resolved.get("fps") is not None and "fps" in config.get("param_mapping", {}):
+        params["fps"] = resolved["fps"]
+
+    return chosen, params, resolved
+
+
+@app.post("/jobs_prompt_only")
+async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_auth)):
+    """Generate a video from a static image and text prompt."""
+    model, input_params, resolved = await _resolve_job_model(
+        seconds=req.seconds,
+        resolution=req.resolution,
+        quality=req.quality,
+        fps=req.fps,
+        has_audio=False,
+        user_context=req.user_context,
+        model=req.model,
+        model_override=req.model_override,
+        model_params=req.model_params,
+    )
+    prefix = resolve_user_storage_prefix(req.user_context)
+    user_id = req.user_context.id if req.user_context else None
+
     video_url = await generate_video_from_prompt(
         model,
         req.image_url,
         req.prompt,
-        req.seconds,
-        req.resolution,
+        resolved["seconds"],
+        resolved["resolution"],
+        fps=resolved.get("fps"),
+        input_params=input_params,
     )
     video_bytes = await fetch_binary(video_url)
     final_key = build_storage_key(prefix, "videos", "mp4")
@@ -859,8 +746,8 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             script=None,
             prompt=req.prompt,
             voice_id=None,
-            resolution=req.resolution,
-            duration=req.seconds,
+            resolution=resolved["resolution"],
+            duration=resolved["seconds"],
             model=model,
         )
     except Exception:
@@ -874,15 +761,18 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
 async def create_job_with_prompt_and_tts(
     req: JobPromptTTS, _: None = Depends(require_auth)
 ):
-    """Generate a video with synchronized speech.
-
-    Steps:
-        1. Synthesize speech using ElevenLabs.
-        2. Create an animated video with the selected model.
-        3. For speech-to-video models (like Wan), provide the audio to the model.
-        4. For other models, mux the audio and video together and store the final file.
-    """
-    model = normalize_video_model(req.model)
+    """Generate a video with synchronized speech."""
+    model, input_params, resolved = await _resolve_job_model(
+        seconds=req.seconds,
+        resolution=req.resolution,
+        quality=req.quality,
+        fps=req.fps,
+        has_audio=True,
+        user_context=req.user_context,
+        model=req.model,
+        model_override=req.model_override,
+        model_params=req.model_params,
+    )
     prefix = resolve_user_storage_prefix(req.user_context)
     user_id = req.user_context.id if req.user_context else None
 
@@ -895,28 +785,29 @@ async def create_job_with_prompt_and_tts(
     video_url: str | None = None
 
     try:
-        # For speech-to-video models like Wan, pass the audio URL to the model
-        if model == "wan-video/wan-2.2-s2v":
+        if get_model_config(model)["capabilities"].get("supportsAudioIn"):
             video_url = await generate_video_from_prompt(
                 model,
                 req.image_url,
                 req.prompt,
-                req.seconds,
-                req.resolution,
+                resolved["seconds"],
+                resolved["resolution"],
                 audio_public_url,
+                resolved.get("fps"),
+                input_params,
             )
-            # For speech-to-video models, the video already has synced audio
             final_key = build_storage_key(prefix, "videos", "mp4")
             final_bytes = await fetch_binary(video_url)
             final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
         else:
-            # For other models, generate video separately and mux with audio
             video_url = await generate_video_from_prompt(
                 model,
                 req.image_url,
                 req.prompt,
-                req.seconds,
-                req.resolution,
+                resolved["seconds"],
+                resolved["resolution"],
+                fps=resolved.get("fps"),
+                input_params=input_params,
             )
 
             final_bytes = await mux_video_audio(video_url, audio_public_url)
@@ -930,8 +821,8 @@ async def create_job_with_prompt_and_tts(
             script=req.text,
             prompt=req.prompt,
             voice_id=req.voice_id,
-            resolution=req.resolution,
-            duration=req.seconds,
+            resolution=resolved["resolution"],
+            duration=resolved["seconds"],
             model=model,
         )
     except Exception:

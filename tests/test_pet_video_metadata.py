@@ -76,7 +76,9 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch("main.generate_video_from_prompt", new_callable=AsyncMock) as mock_generate,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
             patch("main.build_storage_key", return_value="videos/final.mp4"),
@@ -126,7 +128,9 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("main.elevenlabs_tts_bytes", new_callable=AsyncMock) as mock_tts,
-            patch("main.generate_video_from_prompt", new_callable=AsyncMock) as mock_generate,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
             patch("main.mux_video_audio", new_callable=AsyncMock) as mock_mux,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch(

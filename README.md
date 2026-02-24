@@ -72,15 +72,21 @@ Base URL: http://localhost:8000
   - Response: { "ok": true }
 
 - GET /models
-  - Response: { 
+  - Response includes tiered models with routing defaults. Example:
+    {
       "supported_models": {
-        "wan-video/wan-2.1": {"name": "Wan v2.1", "is_default": false},
-        "minimax/hailuo-02": {"name": "Hailuo-02", "is_default": false},
-        "kwaivgi/kling-v2.1": {"name": "Kling v2.1", "is_default": false},
-        "wan-video/wan-2.2-s2v": {"name": "Wan v2.2", "is_default": true},
-        "bytedance/seedance-1-lite": {"name": "SeeDance-1 Lite", "is_default": false}
+        "wan-video/wan2.6-i2v-flash": {"name": "Wan 2.6 I2V Flash", "tier": "fast", "is_default": true},
+        "kwaivgi/kling-v2.6": {"name": "Kling v2.6", "tier": "premium", "is_default": false},
+        "bytedance/seedance-1-pro-fast": {"name": "SeeDance-1 Pro Fast", "tier": "budget", "is_default": false},
+        "wan-video/wan-2.2-s2v": {"name": "Wan v2.2 S2V", "tier": "legacy", "is_default": false}
       },
-    "default_model": "wan-video/wan-2.2-s2v"
+      "default_model": "wan-video/wan2.6-i2v-flash",
+      "routing_defaults": {
+        "fast": "wan-video/wan2.6-i2v-flash",
+        "premium": "kwaivgi/kling-v2.6",
+        "budget": "bytedance/seedance-1-pro-fast",
+        "legacyFallback": "wan-video/wan-2.2-s2v"
+      }
     }
 
 - POST /jobs_prompt_only
@@ -90,7 +96,7 @@ Base URL: http://localhost:8000
       "prompt": "The dog smiles and tilts its head",
       "seconds": 6,
       "resolution": "768p",
-      "model": "kwaivgi/kling-v2.1" // optional; prompt-only requests fall back to Wan v2.1
+      "model": "kwaivgi/kling-v2.6" // optional; prompt-only requests default to Wan 2.6 I2V Flash
     }
   - Response: { "video_url": "https://.../video.mp4" }
   - Note: wan-video/wan-2.2-s2v cannot be used (requires audio)
@@ -135,6 +141,12 @@ Notes
   - Cannot be used with `/jobs_prompt_only` endpoint (will return 400 error)
   - When used with `/jobs_prompt_tts`, the generated video already includes synced audio
   - For Wan model, `final_url` equals `video_url` (no separate muxing needed)
+
+
+### Model tier routing and legacy normalization
+Model selection now routes through four tiers: `fast`, `premium`, `budget`, and `legacyFallback`. If the client does not provide a model (or provides an unknown slug), the backend defaults to `wan-video/wan2.6-i2v-flash` for quick turnaround.
+
+For backward compatibility, legacy slugs are normalized before validation and submission to Replicate. Existing saved DB model IDs and incoming payloads using old slugs continue to work without migration downtime.
 
 ## Deployment
 A ready‑to‑use Render spec is provided in `render.yaml`.

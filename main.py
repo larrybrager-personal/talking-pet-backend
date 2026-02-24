@@ -1,6 +1,6 @@
 """
-Minimal FastAPI backend (cleaned) for Talking Pet MVP
-- ElevenLabs TTS → Supabase upload → Hailuo-02 (via Replicate) → video_url
+Minimal FastAPI backend (cleaned) for Talking Pet MVP.
+- ElevenLabs TTS + Replicate tiered model routing + Supabase uploads
 - Keeps one debug helper: /debug/head to inspect public file headers
 """
 
@@ -41,10 +41,73 @@ API_AUTH_ENABLED = os.getenv("API_AUTH_ENABLED", "false").strip().lower() in {
 }
 API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
 
+# Replicate model routing tiers and legacy model normalization.
+VIDEO_MODEL_ROUTES = {
+    "fast": "wan-video/wan2.6-i2v-flash",
+    "premium": "kwaivgi/kling-v2.6",
+    "budget": "bytedance/seedance-1-pro-fast",
+    "legacyFallback": "wan-video/wan-2.2-s2v",
+}
+
+LEGACY_MODEL_ALIASES = {
+    "minimax/hailuo-02": "minimax/hailuo-2.3",
+    "kwaivgi/kling-v2.1": "kwaivgi/kling-v2.6",
+    "bytedance/seedance-1-lite": "bytedance/seedance-1-pro-fast",
+    "wan-video/wan-2.1": "wan-video/wan2.6-i2v-flash",
+}
+
 # Supported i2v models configuration
 SUPPORTED_MODELS = {
-    "minimax/hailuo-02": {
-        "name": "Hailuo-02",
+    "wan-video/wan2.6-i2v-flash": {
+        "name": "Wan 2.6 I2V Flash",
+        "tier": "fast",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": True,
+            "generatesAudio": False,
+            "maxDurationSeconds": 10,
+        },
+        "default_params": {},
+        "param_mapping": {
+            "image_url": "image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "resolution",
+            "audio_url": "audio",
+        },
+        "supported_resolutions": ["768p", "1080p"],
+    },
+    "wan-video/wan-2.6-i2v": {
+        "name": "Wan 2.6 I2V",
+        "tier": "premium",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": True,
+            "generatesAudio": False,
+            "maxDurationSeconds": 10,
+        },
+        "default_params": {},
+        "param_mapping": {
+            "image_url": "image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "resolution",
+            "audio_url": "audio",
+        },
+        "supported_resolutions": ["768p", "1080p"],
+    },
+    "minimax/hailuo-2.3": {
+        "name": "Hailuo 2.3",
+        "tier": "premium",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": False,
+            "generatesAudio": False,
+            "maxDurationSeconds": 10,
+        },
         "default_params": {
             "prompt_optimizer": False,
         },
@@ -56,21 +119,37 @@ SUPPORTED_MODELS = {
         },
         "supported_resolutions": ["512p", "768p", "1080p"],
     },
-    "wan-video/wan-2.1": {
-        "name": "Wan v2.1",
+    "minimax/hailuo-2.3-fast": {
+        "name": "Hailuo 2.3 Fast",
+        "tier": "budget",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": False,
+            "generatesAudio": False,
+            "maxDurationSeconds": 10,
+        },
         "default_params": {
-            "format": "wan2.1",
+            "prompt_optimizer": False,
         },
         "param_mapping": {
-            "image_url": "image",
+            "image_url": "first_frame_image",
             "prompt": "prompt",
             "seconds": "duration",
             "resolution": "resolution",
         },
-        "supported_resolutions": ["768p", "1080p"],
+        "supported_resolutions": ["512p", "768p", "1080p"],
     },
-    "kwaivgi/kling-v2.1": {
-        "name": "Kling v2.1",
+    "kwaivgi/kling-v2.6": {
+        "name": "Kling v2.6",
+        "tier": "premium",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": False,
+            "generatesAudio": True,
+            "maxDurationSeconds": 10,
+        },
         "default_params": {
             "mode": "standard",
             "aspect_ratio": "1:1",
@@ -83,8 +162,38 @@ SUPPORTED_MODELS = {
         },
         "supported_resolutions": ["720p", "1080p"],
     },
+    "kwaivgi/kling-v2.5-turbo-pro": {
+        "name": "Kling v2.5 Turbo Pro",
+        "tier": "fast",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": False,
+            "generatesAudio": True,
+            "maxDurationSeconds": 10,
+        },
+        "default_params": {
+            "mode": "standard",
+            "aspect_ratio": "1:1",
+        },
+        "param_mapping": {
+            "image_url": "start_image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "aspect_ratio",
+        },
+        "supported_resolutions": ["720p", "1080p"],
+    },
     "wan-video/wan-2.2-s2v": {
-        "name": "Wan v2.2",
+        "name": "Wan v2.2 S2V",
+        "tier": "legacy",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": True,
+            "generatesAudio": True,
+            "maxDurationSeconds": 10,
+        },
         "default_params": {
             "guidance_scale": 7.5,
             "num_inference_steps": 25,
@@ -98,8 +207,16 @@ SUPPORTED_MODELS = {
         },
         "supported_resolutions": ["768p", "1080p"],
     },
-    "bytedance/seedance-1-lite": {
-        "name": "SeeDance-1 Lite",
+    "bytedance/seedance-1-pro-fast": {
+        "name": "SeeDance-1 Pro Fast",
+        "tier": "budget",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": False,
+            "generatesAudio": False,
+            "maxDurationSeconds": 10,
+        },
         "default_params": {
             "guidance_scale": 7.5,
             "num_inference_steps": 20,
@@ -112,13 +229,32 @@ SUPPORTED_MODELS = {
         },
         "supported_resolutions": ["480p", "720p", "1080p"],
     },
+    "bytedance/seedance-1-pro": {
+        "name": "SeeDance-1 Pro",
+        "tier": "premium",
+        "capabilities": {
+            "supportsImageToVideo": True,
+            "supportsTextToVideo": False,
+            "supportsAudioIn": False,
+            "generatesAudio": False,
+            "maxDurationSeconds": 10,
+        },
+        "default_params": {
+            "guidance_scale": 7.5,
+            "num_inference_steps": 25,
+        },
+        "param_mapping": {
+            "image_url": "image",
+            "prompt": "prompt",
+            "seconds": "duration",
+            "resolution": "resolution",
+        },
+        "supported_resolutions": ["480p", "720p", "1080p"],
+    },
 }
 
-# Default model
-DEFAULT_MODEL = "wan-video/wan-2.2-s2v"
-# Prompt-only fallback model keeps non-audio flows working when the global default
-# requires speech-to-video inputs.
-PROMPT_ONLY_FALLBACK_MODEL = "wan-video/wan-2.1"
+DEFAULT_MODEL = VIDEO_MODEL_ROUTES["fast"]
+PROMPT_ONLY_FALLBACK_MODEL = DEFAULT_MODEL
 
 # TTS tuning
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
@@ -180,7 +316,7 @@ class JobPromptOnly(BaseModel):
         prompt: Text prompt describing the desired animation.
         seconds: Duration of the generated video.
         resolution: Target output resolution, defaults to 768p.
-        model: Optional Replicate model identifier. Defaults to Hailuo-02.
+        model: Optional Replicate model identifier. Defaults to the fast routing model.
     """
 
     image_url: str
@@ -205,7 +341,7 @@ class JobPromptTTS(BaseModel):
         voice_id: ElevenLabs voice identifier.
         seconds: Duration of the generated video.
         resolution: Target output resolution, defaults to 768p.
-        model: Optional Replicate model identifier. Defaults to Hailuo-02.
+        model: Optional Replicate model identifier. Defaults to the fast routing model.
     """
 
     image_url: str
@@ -225,11 +361,28 @@ class HeadRequest(BaseModel):
 
 
 # ===== Helpers =====
+def normalize_video_model(model: str | None) -> str:
+    """Normalize legacy or unknown model ids to a supported model slug."""
+
+    if not model:
+        return DEFAULT_MODEL
+    normalized = LEGACY_MODEL_ALIASES.get(model, model)
+    if normalized in SUPPORTED_MODELS:
+        return normalized
+    return DEFAULT_MODEL
+
+
+def get_default_video_model(mode: str = "fast") -> str:
+    """Return default model slug for a routing mode, falling back to fast."""
+
+    return VIDEO_MODEL_ROUTES.get(mode, VIDEO_MODEL_ROUTES["fast"])
+
+
 def get_model_config(model: str) -> dict:
     """Get configuration for a supported model.
 
     Args:
-        model: Model identifier (e.g., 'minimax/hailuo-02')
+        model: Model identifier (e.g., 'wan-video/wan2.6-i2v-flash')
 
     Returns:
         Model configuration dictionary
@@ -281,7 +434,7 @@ def build_model_payload(
         payload["input"][param_mapping["prompt"]] = prompt
     if "seconds" in param_mapping:
         # Handle special case for Kling which only accepts duration 5 or 10
-        if model == "kwaivgi/kling-v2.1":
+        if model.startswith("kwaivgi/kling-"):
             # Map seconds to valid Kling duration values
             if seconds <= 5:
                 payload["input"][param_mapping["seconds"]] = 5
@@ -291,7 +444,7 @@ def build_model_payload(
             payload["input"][param_mapping["seconds"]] = seconds
     if "resolution" in param_mapping:
         # Handle special case for Kling which uses aspect ratio
-        if model == "kwaivgi/kling-v2.1":
+        if model.startswith("kwaivgi/kling-"):
             # Convert resolution to aspect ratio for Kling
             payload["input"].setdefault("mode", "standard")
             if resolution == "1080p":
@@ -303,7 +456,7 @@ def build_model_payload(
             else:
                 payload["input"]["mode"] = "standard"
                 payload["input"][param_mapping["resolution"]] = "1:1"
-        elif model == "bytedance/seedance-1-lite":
+        elif model.startswith("bytedance/seedance-1-"):
             # SeeDance only accepts "480p", "720p", "1080p"
             if resolution == "480p":
                 payload["input"][param_mapping["resolution"]] = "480p"
@@ -648,19 +801,23 @@ async def list_supported_models(_: None = Depends(require_auth)):
     for model_id, config in SUPPORTED_MODELS.items():
         models[model_id] = {
             "name": config["name"],
+            "tier": config["tier"],
+            "capabilities": config["capabilities"],
             "is_default": model_id == DEFAULT_MODEL,
         }
         if "supported_resolutions" in config:
             models[model_id]["supported_resolutions"] = config["supported_resolutions"]
-    return {"supported_models": models, "default_model": DEFAULT_MODEL}
+    return {
+        "supported_models": models,
+        "default_model": DEFAULT_MODEL,
+        "routing_defaults": VIDEO_MODEL_ROUTES,
+    }
 
 
 @app.post("/jobs_prompt_only")
-async def create_job_with_prompt(
-    req: JobPromptOnly, _: None = Depends(require_auth)
-):
+async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_auth)):
     """Generate a video from a static image and text prompt."""
-    requested_model = req.model or DEFAULT_MODEL
+    requested_model = normalize_video_model(req.model)
     if requested_model == "wan-video/wan-2.2-s2v":
         if req.model is None:
             model = PROMPT_ONLY_FALLBACK_MODEL
@@ -725,7 +882,7 @@ async def create_job_with_prompt_and_tts(
         3. For speech-to-video models (like Wan), provide the audio to the model.
         4. For other models, mux the audio and video together and store the final file.
     """
-    model = req.model or DEFAULT_MODEL
+    model = normalize_video_model(req.model)
     prefix = resolve_user_storage_prefix(req.user_context)
     user_id = req.user_context.id if req.user_context else None
 

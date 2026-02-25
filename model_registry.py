@@ -23,7 +23,7 @@ SUPPORTED_MODELS = {
             "supportsTextToVideo": False,
             "supportsAudioIn": True,
             "generatesAudio": False,
-            "maxDurationSeconds": 10,
+            "maxDurationSeconds": 15,
         },
         "default_params": {},
         "param_mapping": {
@@ -35,7 +35,7 @@ SUPPORTED_MODELS = {
             "fps": "fps",
         },
         "supported_resolutions": ["720p", "1080p"],
-        "supported_durations": [6, 10],
+        "supported_durations": [5, 10, 15],
         "supported_fps": [24, 30],
         "tunable_params": [
             {
@@ -61,7 +61,7 @@ SUPPORTED_MODELS = {
             "supportsTextToVideo": False,
             "supportsAudioIn": True,
             "generatesAudio": False,
-            "maxDurationSeconds": 10,
+            "maxDurationSeconds": 15,
         },
         "default_params": {},
         "param_mapping": {
@@ -73,7 +73,7 @@ SUPPORTED_MODELS = {
             "fps": "fps",
         },
         "supported_resolutions": ["720p", "1080p"],
-        "supported_durations": [6, 10],
+        "supported_durations": [5, 10, 15],
         "supported_fps": [24, 30],
         "tunable_params": [
             {

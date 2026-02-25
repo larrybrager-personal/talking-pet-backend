@@ -114,7 +114,7 @@ class RoutingResolutionTestCase(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 free_result["resolved_model_slug"], "wan-video/wan2.6-i2v-flash"
             )
-            self.assertEqual(free_result["resolved"]["seconds"], 6)
+            self.assertEqual(free_result["resolved"]["seconds"], 5)
             self.assertEqual(free_result["resolved"]["fps"], 30)
 
             mock_tier.return_value = "studio"
@@ -199,6 +199,7 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["resolved"]["resolution"], "720p")
+        self.assertEqual(payload["resolved"]["seconds"], 5)
 
     def test_resolve_model_endpoint_shape_and_normalization(self):
         with patch(
@@ -224,7 +225,7 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertIn("model", payload)
         self.assertIn("meta", payload)
         self.assertIn("resolved", payload)
-        self.assertEqual(payload["resolved"]["seconds"], 6)
+        self.assertEqual(payload["resolved"]["seconds"], 5)
         self.assertIsNone(payload["resolved"]["fps"])
 
 

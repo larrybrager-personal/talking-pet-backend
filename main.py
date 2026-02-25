@@ -188,6 +188,49 @@ def to_model_dict(model: BaseModel) -> dict[str, Any]:
 
 
 # ===== Helpers =====
+
+
+def _resolve_generation_settings(
+    *,
+    config: dict[str, Any],
+    seconds: int,
+    resolution: str,
+    fps: int | None,
+    quality: str,
+) -> dict[str, Any]:
+    """Normalize generation settings to values supported by the selected model."""
+
+    supported_durations = config.get("supported_durations", [])
+    if supported_durations:
+        lower_or_equal = [value for value in supported_durations if value <= seconds]
+        resolved_seconds = (
+            max(lower_or_equal) if lower_or_equal else min(supported_durations)
+        )
+    else:
+        resolved_seconds = seconds
+
+    supported_resolutions = config.get("supported_resolutions", [])
+    if resolution in supported_resolutions:
+        resolved_resolution = resolution
+    elif resolution in {"768p", "720p"} and "720p" in supported_resolutions:
+        resolved_resolution = "720p"
+    elif resolution in {"1024p", "1080p"} and "1080p" in supported_resolutions:
+        resolved_resolution = "1080p"
+    else:
+        resolved_resolution = (
+            supported_resolutions[0] if supported_resolutions else resolution
+        )
+
+    resolved_fps = fps if fps in config.get("supported_fps", []) else None
+
+    return {
+        "seconds": resolved_seconds,
+        "fps": resolved_fps,
+        "resolution": resolved_resolution,
+        "quality": quality,
+    }
+
+
 def get_model_config(model: str) -> dict:
     """Get configuration for a supported model.
 
@@ -617,27 +660,13 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
     if override:
         model = normalize_video_model(override)
         config = get_model_config(model)
-        resolved_seconds = req.seconds
-        supported_durations = config.get("supported_durations", [])
-        if supported_durations:
-            lower_or_equal = [
-                value for value in supported_durations if value <= req.seconds
-            ]
-            resolved_seconds = (
-                max(lower_or_equal) if lower_or_equal else min(supported_durations)
-            )
-        supported_resolutions = config.get("supported_resolutions", [])
-        if req.resolution in supported_resolutions:
-            resolved_resolution = req.resolution
-        elif req.resolution in {"768p", "720p"} and "720p" in supported_resolutions:
-            resolved_resolution = "720p"
-        elif req.resolution in {"1024p", "1080p"} and "1080p" in supported_resolutions:
-            resolved_resolution = "1080p"
-        else:
-            resolved_resolution = (
-                supported_resolutions[0] if supported_resolutions else req.resolution
-            )
-        resolved_fps = req.fps if req.fps in config.get("supported_fps", []) else None
+        resolved_settings = _resolve_generation_settings(
+            config=config,
+            seconds=req.seconds,
+            resolution=req.resolution,
+            fps=req.fps,
+            quality=req.quality,
+        )
         meta = {
             "name": config["name"],
             "tier": config["tier"],
@@ -651,12 +680,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
         return {
             "model": model,
             "meta": meta,
-            "resolved": {
-                "seconds": resolved_seconds,
-                "fps": resolved_fps,
-                "resolution": resolved_resolution,
-                "quality": req.quality,
-            },
+            "resolved": {**resolved_settings},
         }
 
     resolved = await resolve_model_for_intent(intent)
@@ -683,23 +707,13 @@ async def _resolve_job_model(
     if override:
         chosen = normalize_video_model(override)
         config = get_model_config(chosen)
-        supported_resolutions = config.get("supported_resolutions", [])
-        if resolution in supported_resolutions:
-            resolved_resolution = resolution
-        elif resolution in {"768p", "720p"} and "720p" in supported_resolutions:
-            resolved_resolution = "720p"
-        elif resolution in {"1024p", "1080p"} and "1080p" in supported_resolutions:
-            resolved_resolution = "1080p"
-        else:
-            resolved_resolution = (
-                supported_resolutions[0] if supported_resolutions else resolution
-            )
-        resolved = {
-            "seconds": seconds,
-            "fps": fps if fps in config.get("supported_fps", []) else None,
-            "resolution": resolved_resolution,
-            "quality": quality,
-        }
+        resolved = _resolve_generation_settings(
+            config=config,
+            seconds=seconds,
+            resolution=resolution,
+            fps=fps,
+            quality=quality,
+        )
     else:
         result = await resolve_model_for_intent(
             {

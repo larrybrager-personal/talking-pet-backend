@@ -12,3 +12,8 @@
 - Normalized frontend resolution aliases (`768p`/`1024p`) to backend-supported values (`720p`/`1080p`) during intent resolution and explicit model overrides to prevent Replicate 422 validation failures.
 - Updated Wan 2.6 model metadata to advertise supported resolutions (`720p`, `1080p`) and added tests covering resolution normalization paths.
 
+## 2026-02-25
+- Updated Wan 2.6 model metadata to align with Replicate duration enums (`5`, `10`, `15`) and max duration 15s for both `wan2.6-i2v-flash` and `wan-2.6-i2v`.
+- Added a shared `_resolve_generation_settings` helper in `main.py` so explicit model overrides in `/resolve_model`, `/jobs_prompt_only`, and `/jobs_prompt_tts` consistently snap unsupported durations (e.g., frontend 6s -> backend 5s for Wan 2.6).
+- Extended tests to assert override duration normalization and updated routing expectations for Wan 2.6 duration snapping.
+

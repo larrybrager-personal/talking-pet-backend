@@ -9,11 +9,12 @@
   - Updated `/jobs_prompt_only` and `/jobs_prompt_tts` to support quality/fps/model_override/model_params and automatic routing.
 - Updated payload generation to merge safe, allowlisted model params and include fps when supported.
 - Expanded tests for routing behavior, `/resolve_model`, enriched `/models`, and model param allowlist handling.
-- Normalized frontend resolution aliases (`768p`/`1024p`) to backend-supported values (`720p`/`1080p`) during intent resolution and explicit model overrides to prevent Replicate 422 validation failures.
+- Normalized frontend resolution aliases (`768p`/`1024p`) to backend-supported values (`720p`/`1080p`) during intent resolution and explicit model overrides to prevent Replicate validation failures.
 - Updated Wan 2.6 model metadata to advertise supported resolutions (`720p`, `1080p`) and added tests covering resolution normalization paths.
 
 ## 2026-02-25
-- Updated Wan 2.6 model metadata to align with Replicate duration enums (`5`, `10`, `15`) and max duration 15s for both `wan2.6-i2v-flash` and `wan-2.6-i2v`.
-- Added a shared `_resolve_generation_settings` helper in `main.py` so explicit model overrides in `/resolve_model`, `/jobs_prompt_only`, and `/jobs_prompt_tts` consistently snap unsupported durations (e.g., frontend 6s -> backend 5s for Wan 2.6).
+- Updated Wan 2.6 model metadata to align with duration enums (`5`, `10`, `15`) and max duration 15s for both `wan2.6-i2v-flash` and `wan-2.6-i2v`.
+- Added shared generation-setting normalization so explicit model overrides in `/resolve_model`, `/jobs_prompt_only`, and `/jobs_prompt_tts` consistently snap unsupported durations.
 - Extended tests to assert override duration normalization and updated routing expectations for Wan 2.6 duration snapping.
-
+- Refreshed repository documentation (`README.md`, frontend routing guide, known-gaps log) so human and AI operators can follow request flow, model routing, normalization, and operational runbooks without reading source first.
+- Clarified endpoint examples to include advanced routing fields and user context.

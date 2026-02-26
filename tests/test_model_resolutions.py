@@ -268,5 +268,49 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertTrue(payload["resolved_model_slug"])
 
 
+class ModelParamValidationTestCase(unittest.TestCase):
+    def test_numeric_tunable_must_respect_declared_range(self):
+        filtered = main.apply_allowed_model_params(
+            "bytedance/seedance-1-pro-fast",
+            {"num_inference_steps": 999, "guidance_scale": 4.5},
+        )
+
+        self.assertEqual(filtered, {"guidance_scale": 4.5})
+
+    def test_numeric_tunable_must_respect_step(self):
+        filtered = main.apply_allowed_model_params(
+            "bytedance/seedance-1-pro-fast",
+            {"guidance_scale": 4.25},
+        )
+
+        self.assertEqual(filtered, {})
+
+    def test_enum_tunable_rejects_unknown_values(self):
+        filtered = main.apply_allowed_model_params(
+            "kwaivgi/kling-v2.6",
+            {"mode": "ultra"},
+        )
+
+        self.assertEqual(filtered, {})
+
+    def test_boolean_tunable_requires_boolean_type(self):
+        filtered = main.apply_allowed_model_params(
+            "minimax/hailuo-2.3",
+            {"prompt_optimizer": "true"},
+        )
+
+        self.assertEqual(filtered, {})
+
+
+class QualityNormalizationTestCase(unittest.TestCase):
+    def test_quality_aliases_normalize(self):
+        self.assertEqual(main.normalize_quality("best"), "quality")
+        self.assertEqual(main.normalize_quality("medium"), "balanced")
+        self.assertEqual(main.normalize_quality("low"), "fast")
+
+    def test_unknown_quality_defaults_to_fast(self):
+        self.assertEqual(main.normalize_quality("not-a-tier"), "fast")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -101,8 +101,8 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "script": None,
                 "prompt": "Say hi",
                 "voice_id": None,
-                "resolution": "768p",
-                "duration": 6,
+                "resolution": "720p",
+                "duration": 5,
                 "model": main.PROMPT_ONLY_FALLBACK_MODEL,
             },
         )
@@ -165,8 +165,8 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "script": "Hello!",
                 "prompt": "Say hi",
                 "voice_id": "voice-123",
-                "resolution": "768p",
-                "duration": 6,
+                "resolution": "720p",
+                "duration": 5,
                 "model": main.DEFAULT_MODEL,
             },
         )

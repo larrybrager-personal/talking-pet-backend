@@ -26,3 +26,8 @@
 - Extended `/resolve_model` response contract to include `resolved_model_slug` while preserving existing `model` for backward compatibility.
 - Updated `/models` response mapping to expose tunable parameter `description` (derived from `help`) without mutating global model registry metadata.
 - Added endpoint tests covering legacy `quality="best"` normalization, `resolved_model_slug` presence, and `tunable_params[].description` alias behavior.
+- Centralized quality normalization in `model_routing.normalize_quality` and reused it in both intent routing and FastAPI handlers to remove duplicate alias logic.
+- Hardened model tunable param filtering in `apply_allowed_model_params` with type/range/step/enum validation instead of key-only allowlisting.
+- Replaced blocking `time.sleep` in Replicate polling loop with non-blocking `await asyncio.sleep` to avoid pausing the event loop during long-running prediction polls.
+- Expanded tests to cover quality normalization utility behavior and model-param validation edge cases (boolean, enum, numeric range, numeric step).
+

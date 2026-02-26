@@ -20,6 +20,10 @@
 - Clarified endpoint examples to include advanced routing fields and user context.
 
 ## 2026-02-26
+- Added thorough final-video delivery diagnostics: HEAD/Range checks and ffprobe-based container/codec inspection helpers (`collect_video_delivery_debug`, `inspect_video_bytes`).
+- Added proactive validation after final upload in both `/jobs_prompt_only` and `/jobs_prompt_tts`; requests now fail fast with actionable 502 when the returned final URL is unreachable/empty.
+- Added new `/debug/final_video` endpoint to return transport diagnostics plus MP4 probe metadata for a supplied URL.
+- Extended metadata tests to cover final-video diagnostics behavior and new debug endpoint output.
 - Added configurable `VIDEO_UPLOAD_TARGET_BYTES` (default 9.5MB) and upload-time video size guard/compression path before Supabase uploads for both `/jobs_prompt_only` and `/jobs_prompt_tts`.
 - Added progressive MP4 recompression helper using ffmpeg (`crf` 28/32/36) with actionable 400 error when still over target size.
 - Added tests for compression behavior and endpoint upload calls to ensure compressed bytes are uploaded.

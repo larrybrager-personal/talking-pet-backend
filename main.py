@@ -5,6 +5,8 @@ Minimal FastAPI backend (cleaned) for Talking Pet MVP.
 """
 
 import asyncio
+import json
+import logging
 import os
 import secrets
 import uuid
@@ -58,6 +60,12 @@ API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
 TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "600"))
 VIDEO_UPLOAD_TARGET_BYTES = int(os.getenv("VIDEO_UPLOAD_TARGET_BYTES", "9500000"))
+ENABLE_FINAL_VIDEO_DEBUG = os.getenv("ENABLE_FINAL_VIDEO_DEBUG", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 PUBLIC_BASE = f"{SUPABASE_URL}/storage/v1/object/public"
 UPLOAD_BASE = f"{SUPABASE_URL}/storage/v1/object"
@@ -71,6 +79,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logger = logging.getLogger("talking_pet_backend")
 
 
 # ===== Auth =====
@@ -177,6 +187,12 @@ class JobPromptTTS(BaseModel):
 
 class HeadRequest(BaseModel):
     """Request body for the ``/debug/head`` endpoint."""
+
+    url: str
+
+
+class FinalVideoDebugRequest(BaseModel):
+    """Request body for the ``/debug/final_video`` endpoint."""
 
     url: str
 
@@ -492,6 +508,98 @@ async def head_info(url: str) -> Tuple[int, str, int]:
             r = await c.get(url, headers={"Range": "bytes=0-1"})
         size = int(r.headers.get("content-length", "0"))
         return r.status_code, r.headers.get("content-type", ""), size
+
+
+def inspect_video_bytes(video_bytes: bytes) -> dict[str, Any]:
+    """Inspect MP4 bytes using ffprobe to surface codec/container issues."""
+
+    tmpdir = tempfile.mkdtemp()
+    in_path = os.path.join(tmpdir, "inspect.mp4")
+    try:
+        with open(in_path, "wb") as infile:
+            infile.write(video_bytes)
+
+        ffprobe_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            in_path,
+        ]
+        result = subprocess.run(
+            ffprobe_cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        parsed = json.loads(result.stdout)
+        streams = parsed.get("streams", [])
+        video_stream = next((s for s in streams if s.get("codec_type") == "video"), {})
+        audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), {})
+        return {
+            "is_valid_mp4": bool(parsed.get("format")),
+            "container": parsed.get("format", {}).get("format_name"),
+            "duration": parsed.get("format", {}).get("duration"),
+            "size": parsed.get("format", {}).get("size"),
+            "video_codec": video_stream.get("codec_name"),
+            "audio_codec": audio_stream.get("codec_name"),
+            "width": video_stream.get("width"),
+            "height": video_stream.get("height"),
+        }
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        json.JSONDecodeError,
+    ) as exc:
+        return {"is_valid_mp4": False, "probe_error": type(exc).__name__}
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+async def collect_video_delivery_debug(url: str) -> dict[str, Any]:
+    """Collect download diagnostics for a final video URL."""
+
+    status, content_type, content_length = await head_info(url)
+    diagnostics: dict[str, Any] = {
+        "head_status": status,
+        "content_type": content_type,
+        "content_length": content_length,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            partial = await client.get(url, headers={"Range": "bytes=0-1023"})
+        diagnostics["range_status"] = partial.status_code
+        diagnostics["accept_ranges"] = partial.headers.get("accept-ranges", "")
+        diagnostics["content_range"] = partial.headers.get("content-range", "")
+    except httpx.HTTPError as exc:
+        diagnostics["range_error"] = type(exc).__name__
+
+    return diagnostics
+
+
+def _raise_final_video_error(
+    message: str,
+    *,
+    final_url: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Raise a user-safe HTTP error while logging actionable debug metadata."""
+
+    payload = {"message": message}
+    if final_url:
+        payload["final_url"] = final_url
+    if details:
+        payload["details"] = details
+
+    logger.error("final_video_issue=%s", payload)
+    raise HTTPException(
+        502,
+        "Final video could not be validated for playback. Use /debug/final_video for details.",
+    )
 
 
 async def replicate_video_from_prompt(
@@ -886,6 +994,24 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             duration=resolved["seconds"],
             model=model,
         )
+
+        if ENABLE_FINAL_VIDEO_DEBUG:
+            diagnostics = await collect_video_delivery_debug(final_url)
+            if diagnostics.get("head_status", 0) >= 400:
+                _raise_final_video_error(
+                    "Uploaded final video URL is not publicly reachable.",
+                    final_url=final_url,
+                    details=diagnostics,
+                )
+            if diagnostics.get("content_length", 0) <= 0:
+                _raise_final_video_error(
+                    "Uploaded final video appears empty.",
+                    final_url=final_url,
+                    details=diagnostics,
+                )
+    except HTTPException:
+        await supabase_delete(final_key)
+        raise
     except Exception:
         await supabase_delete(final_key)
         raise
@@ -967,6 +1093,21 @@ async def create_job_with_prompt_and_tts(
             duration=resolved["seconds"],
             model=model,
         )
+
+        if ENABLE_FINAL_VIDEO_DEBUG and final_url:
+            diagnostics = await collect_video_delivery_debug(final_url)
+            if diagnostics.get("head_status", 0) >= 400:
+                _raise_final_video_error(
+                    "Uploaded final video URL is not publicly reachable.",
+                    final_url=final_url,
+                    details=diagnostics,
+                )
+            if diagnostics.get("content_length", 0) <= 0:
+                _raise_final_video_error(
+                    "Uploaded final video appears empty.",
+                    final_url=final_url,
+                    details=diagnostics,
+                )
     except Exception:
         if final_key:
             await supabase_delete(final_key)
@@ -986,3 +1127,21 @@ async def debug_head(req: HeadRequest, _: None = Depends(require_auth)):
     """Fetch metadata about a URL without downloading the entire file."""
     status, ctype, size = await head_info(req.url)
     return {"status": status, "content_type": ctype, "bytes": size}
+
+
+@app.post("/debug/final_video")
+async def debug_final_video(
+    req: FinalVideoDebugRequest, _: None = Depends(require_auth)
+):
+    """Inspect final video delivery and MP4 structure for troubleshooting."""
+
+    diagnostics = await collect_video_delivery_debug(req.url)
+    try:
+        sample_bytes = await fetch_binary(req.url, timeout=60)
+    except httpx.HTTPError as exc:
+        diagnostics["download_error"] = type(exc).__name__
+        return diagnostics
+
+    diagnostics["probe"] = inspect_video_bytes(sample_bytes)
+    diagnostics["downloaded_bytes"] = len(sample_bytes)
+    return diagnostics

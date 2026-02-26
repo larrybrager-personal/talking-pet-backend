@@ -57,6 +57,7 @@ API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
 # TTS tuning
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
 TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "600"))
+VIDEO_UPLOAD_TARGET_BYTES = int(os.getenv("VIDEO_UPLOAD_TARGET_BYTES", "9500000"))
 
 PUBLIC_BASE = f"{SUPABASE_URL}/storage/v1/object/public"
 UPLOAD_BASE = f"{SUPABASE_URL}/storage/v1/object"
@@ -620,6 +621,83 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
     return final_bytes
 
 
+def _compress_video_bytes(video_bytes: bytes, crf: int) -> bytes:
+    """Re-encode MP4 bytes with H.264/AAC using a configurable CRF value."""
+
+    tmpdir = tempfile.mkdtemp()
+    in_path = os.path.join(tmpdir, "in.mp4")
+    out_path = os.path.join(tmpdir, "out.mp4")
+
+    try:
+        with open(in_path, "wb") as infile:
+            infile.write(video_bytes)
+
+        import imageio_ffmpeg
+
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [
+            ffmpeg_path,
+            "-y",
+            "-i",
+            in_path,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            str(crf),
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            out_path,
+        ]
+        subprocess.run(cmd, check=True)
+
+        with open(out_path, "rb") as outfile:
+            return outfile.read()
+    finally:
+        shutil.rmtree(tmpdir)
+
+
+def prepare_video_for_upload(video_bytes: bytes) -> bytes:
+    """Ensure MP4 payloads fit the configured upload target size.
+
+    Attempts progressively stronger compression when files exceed
+    ``VIDEO_UPLOAD_TARGET_BYTES``.
+    """
+
+    if len(video_bytes) <= VIDEO_UPLOAD_TARGET_BYTES:
+        return video_bytes
+
+    best = video_bytes
+    for crf in (28, 32, 36):
+        try:
+            compressed = _compress_video_bytes(best, crf)
+        except subprocess.CalledProcessError as exc:
+            raise HTTPException(
+                500,
+                "Failed to compress generated video before upload.",
+            ) from exc
+
+        if len(compressed) < len(best):
+            best = compressed
+        if len(best) <= VIDEO_UPLOAD_TARGET_BYTES:
+            return best
+
+    max_mb = VIDEO_UPLOAD_TARGET_BYTES / (1024 * 1024)
+    actual_mb = len(best) / (1024 * 1024)
+    raise HTTPException(
+        400,
+        (
+            "Generated video is too large for storage upload even after compression "
+            f"({actual_mb:.1f}MB > {max_mb:.1f}MB target). "
+            "Try fewer seconds, lower resolution, or increase VIDEO_UPLOAD_TARGET_BYTES "
+            "if your Supabase project allows larger objects."
+        ),
+    )
+
+
 # ===== Routes =====
 @app.get("/health")
 async def health(_: None = Depends(require_auth)):
@@ -792,8 +870,9 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         input_params=input_params,
     )
     video_bytes = await fetch_binary(video_url)
+    upload_ready_bytes = prepare_video_for_upload(video_bytes)
     final_key = build_storage_key(prefix, "videos", "mp4")
-    final_url = await supabase_upload(video_bytes, final_key, "video/mp4")
+    final_url = await supabase_upload(upload_ready_bytes, final_key, "video/mp4")
 
     try:
         await insert_pet_video(
@@ -855,7 +934,10 @@ async def create_job_with_prompt_and_tts(
             )
             final_key = build_storage_key(prefix, "videos", "mp4")
             final_bytes = await fetch_binary(video_url)
-            final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
+            upload_ready_bytes = prepare_video_for_upload(final_bytes)
+            final_url = await supabase_upload(
+                upload_ready_bytes, final_key, "video/mp4"
+            )
         else:
             video_url = await generate_video_from_prompt(
                 model,
@@ -868,8 +950,11 @@ async def create_job_with_prompt_and_tts(
             )
 
             final_bytes = await mux_video_audio(video_url, audio_public_url)
+            upload_ready_bytes = prepare_video_for_upload(final_bytes)
             final_key = build_storage_key(prefix, "videos", "mp4")
-            final_url = await supabase_upload(final_bytes, final_key, "video/mp4")
+            final_url = await supabase_upload(
+                upload_ready_bytes, final_key, "video/mp4"
+            )
 
         await insert_pet_video(
             user_id=user_id,

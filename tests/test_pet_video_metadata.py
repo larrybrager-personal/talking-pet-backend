@@ -81,6 +81,7 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
             ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch("main.prepare_video_for_upload", return_value=b"compressed-video"),
             patch("main.build_storage_key", return_value="videos/final.mp4"),
             patch("main.insert_pet_video", new_callable=AsyncMock) as mock_insert,
         ):
@@ -113,6 +114,8 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "final_url": "https://public.final/video.mp4",
             },
         )
+        upload_args = mock_upload.await_args.args
+        self.assertEqual(upload_args[0], b"compressed-video")
 
     async def test_create_job_with_prompt_and_tts_records_metadata(self):
         req = main.JobPromptTTS(
@@ -141,6 +144,7 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "main.supabase_upload",
                 new_callable=AsyncMock,
             ) as mock_upload,
+            patch("main.prepare_video_for_upload", return_value=b"compressed-video"),
             patch("main.insert_pet_video", new_callable=AsyncMock) as mock_insert,
         ):
             mock_tts.return_value = b"mp3"
@@ -178,6 +182,7 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "final_url": "https://public.final/video.mp4",
             },
         )
+        self.assertEqual(mock_upload.await_args_list[1].args[0], b"compressed-video")
 
 
 class ModelParamsAllowlistTest(unittest.IsolatedAsyncioTestCase):
@@ -198,6 +203,7 @@ class ModelParamsAllowlistTest(unittest.IsolatedAsyncioTestCase):
             ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch("main.prepare_video_for_upload", return_value=b"compressed-video"),
             patch("main.build_storage_key", return_value="videos/final.mp4"),
             patch("main.insert_pet_video", new_callable=AsyncMock),
         ):

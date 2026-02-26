@@ -20,6 +20,9 @@
 - Clarified endpoint examples to include advanced routing fields and user context.
 
 ## 2026-02-26
+- Added configurable `VIDEO_UPLOAD_TARGET_BYTES` (default 9.5MB) and upload-time video size guard/compression path before Supabase uploads for both `/jobs_prompt_only` and `/jobs_prompt_tts`.
+- Added progressive MP4 recompression helper using ffmpeg (`crf` 28/32/36) with actionable 400 error when still over target size.
+- Added tests for compression behavior and endpoint upload calls to ensure compressed bytes are uploaded.
 - Added quality normalization in `main.py` (`normalize_quality`) so legacy and UI aliases (`best`, `high`, `medium`, `low`) map to supported tiers and unknown values safely default to `fast`.
 - Relaxed request schema quality typing from strict literals to `str` in `/resolve_model`, `/jobs_prompt_only`, and `/jobs_prompt_tts` request models to avoid 422 responses for legacy quality values.
 - Applied normalized quality handling across `/resolve_model` and `_resolve_job_model` so downstream routing and resolved payloads are consistent.

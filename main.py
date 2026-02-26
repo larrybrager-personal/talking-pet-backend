@@ -195,6 +195,8 @@ class FinalVideoDebugRequest(BaseModel):
     """Request body for the ``/debug/final_video`` endpoint."""
 
     url: str
+    include_compression_debug: bool = False
+    target_bytes: int | None = None
 
 
 def to_model_dict(model: BaseModel) -> dict[str, Any]:
@@ -768,32 +770,62 @@ def _compress_video_bytes(video_bytes: bytes, crf: int) -> bytes:
         shutil.rmtree(tmpdir)
 
 
-def prepare_video_for_upload(video_bytes: bytes) -> bytes:
-    """Ensure MP4 payloads fit the configured upload target size.
+def prepare_video_for_upload_with_debug(
+    video_bytes: bytes,
+) -> tuple[bytes, dict[str, Any]]:
+    """Compress video bytes if needed and return both payload + debug metadata."""
 
-    Attempts progressively stronger compression when files exceed
-    ``VIDEO_UPLOAD_TARGET_BYTES``.
-    """
+    limit = VIDEO_UPLOAD_TARGET_BYTES
+    attempts: list[dict[str, Any]] = []
 
-    if len(video_bytes) <= VIDEO_UPLOAD_TARGET_BYTES:
-        return video_bytes
+    if len(video_bytes) <= limit:
+        return (
+            video_bytes,
+            {
+                "target_bytes": limit,
+                "original_bytes": len(video_bytes),
+                "final_bytes": len(video_bytes),
+                "already_within_target": True,
+                "meets_target": True,
+                "attempts": attempts,
+            },
+        )
 
     best = video_bytes
     for crf in (28, 32, 36):
         try:
             compressed = _compress_video_bytes(best, crf)
         except subprocess.CalledProcessError as exc:
+            attempts.append({"crf": crf, "error": type(exc).__name__})
             raise HTTPException(
                 500,
                 "Failed to compress generated video before upload.",
             ) from exc
 
-        if len(compressed) < len(best):
+        improved = len(compressed) < len(best)
+        attempts.append(
+            {
+                "crf": crf,
+                "output_bytes": len(compressed),
+                "improved": improved,
+            }
+        )
+        if improved:
             best = compressed
-        if len(best) <= VIDEO_UPLOAD_TARGET_BYTES:
-            return best
+        if len(best) <= limit:
+            return (
+                best,
+                {
+                    "target_bytes": limit,
+                    "original_bytes": len(video_bytes),
+                    "final_bytes": len(best),
+                    "already_within_target": False,
+                    "meets_target": True,
+                    "attempts": attempts,
+                },
+            )
 
-    max_mb = VIDEO_UPLOAD_TARGET_BYTES / (1024 * 1024)
+    max_mb = limit / (1024 * 1024)
     actual_mb = len(best) / (1024 * 1024)
     raise HTTPException(
         400,
@@ -804,6 +836,75 @@ def prepare_video_for_upload(video_bytes: bytes) -> bytes:
             "if your Supabase project allows larger objects."
         ),
     )
+
+
+def analyze_video_compression(
+    video_bytes: bytes,
+    *,
+    target_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Run compression-analysis attempts for debugging a video payload."""
+
+    if target_bytes is None or target_bytes == VIDEO_UPLOAD_TARGET_BYTES:
+        _, debug = prepare_video_for_upload_with_debug(video_bytes)
+        return debug
+
+    limit = target_bytes
+    attempts: list[dict[str, Any]] = []
+    best = video_bytes
+
+    if len(video_bytes) <= limit:
+        return {
+            "target_bytes": limit,
+            "original_bytes": len(video_bytes),
+            "final_bytes": len(video_bytes),
+            "already_within_target": True,
+            "meets_target": True,
+            "attempts": attempts,
+        }
+
+    for crf in (28, 32, 36):
+        try:
+            compressed = _compress_video_bytes(best, crf)
+        except subprocess.CalledProcessError as exc:
+            attempts.append({"crf": crf, "error": type(exc).__name__})
+            return {
+                "target_bytes": limit,
+                "original_bytes": len(video_bytes),
+                "final_bytes": len(best),
+                "already_within_target": False,
+                "meets_target": False,
+                "attempts": attempts,
+            }
+
+        improved = len(compressed) < len(best)
+        attempts.append(
+            {
+                "crf": crf,
+                "output_bytes": len(compressed),
+                "improved": improved,
+            }
+        )
+        if improved:
+            best = compressed
+        if len(best) <= limit:
+            break
+
+    return {
+        "target_bytes": limit,
+        "original_bytes": len(video_bytes),
+        "final_bytes": len(best),
+        "already_within_target": False,
+        "meets_target": len(best) <= limit,
+        "attempts": attempts,
+    }
+
+
+def prepare_video_for_upload(video_bytes: bytes) -> bytes:
+    """Ensure MP4 payloads fit the configured upload target size."""
+
+    upload_ready_bytes, _ = prepare_video_for_upload_with_debug(video_bytes)
+    return upload_ready_bytes
 
 
 # ===== Routes =====
@@ -978,7 +1079,9 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         input_params=input_params,
     )
     video_bytes = await fetch_binary(video_url)
-    upload_ready_bytes = prepare_video_for_upload(video_bytes)
+    upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
+        video_bytes
+    )
     final_key = build_storage_key(prefix, "videos", "mp4")
     final_url = await supabase_upload(upload_ready_bytes, final_key, "video/mp4")
 
@@ -997,6 +1100,9 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
 
         if ENABLE_FINAL_VIDEO_DEBUG:
             diagnostics = await collect_video_delivery_debug(final_url)
+            if compression_debug is not None:
+                diagnostics["compression"] = compression_debug
+            diagnostics["compression"] = compression_debug
             if diagnostics.get("head_status", 0) >= 400:
                 _raise_final_video_error(
                     "Uploaded final video URL is not publicly reachable.",
@@ -1045,6 +1151,7 @@ async def create_job_with_prompt_and_tts(
     final_key: str | None = None
     final_url: str | None = None
     video_url: str | None = None
+    compression_debug: dict[str, Any] | None = None
 
     try:
         if get_model_config(model)["capabilities"].get("supportsAudioIn"):
@@ -1060,7 +1167,9 @@ async def create_job_with_prompt_and_tts(
             )
             final_key = build_storage_key(prefix, "videos", "mp4")
             final_bytes = await fetch_binary(video_url)
-            upload_ready_bytes = prepare_video_for_upload(final_bytes)
+            upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
+                final_bytes
+            )
             final_url = await supabase_upload(
                 upload_ready_bytes, final_key, "video/mp4"
             )
@@ -1076,7 +1185,9 @@ async def create_job_with_prompt_and_tts(
             )
 
             final_bytes = await mux_video_audio(video_url, audio_public_url)
-            upload_ready_bytes = prepare_video_for_upload(final_bytes)
+            upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
+                final_bytes
+            )
             final_key = build_storage_key(prefix, "videos", "mp4")
             final_url = await supabase_upload(
                 upload_ready_bytes, final_key, "video/mp4"
@@ -1144,4 +1255,11 @@ async def debug_final_video(
 
     diagnostics["probe"] = inspect_video_bytes(sample_bytes)
     diagnostics["downloaded_bytes"] = len(sample_bytes)
+
+    if req.include_compression_debug:
+        diagnostics["compression"] = analyze_video_compression(
+            sample_bytes,
+            target_bytes=req.target_bytes,
+        )
+
     return diagnostics

@@ -20,6 +20,10 @@
 - Clarified endpoint examples to include advanced routing fields and user context.
 
 ## 2026-02-26
+- Extended `/debug/final_video` to optionally include compression debugging (`include_compression_debug`, optional `target_bytes`) so frontend teams can inspect CRF attempt outcomes alongside delivery/codec diagnostics.
+- Added shared compression debug helper (`prepare_video_for_upload_with_debug`) to reuse the same compression path in production uploads and diagnostics.
+- Updated frontend integration guide with concrete UI/API changes needed to surface backend diagnostics after final-video load failures.
+- Expanded tests to cover debug endpoint compression output path.
 - Added thorough final-video delivery diagnostics: HEAD/Range checks and ffprobe-based container/codec inspection helpers (`collect_video_delivery_debug`, `inspect_video_bytes`).
 - Added proactive validation after final upload in both `/jobs_prompt_only` and `/jobs_prompt_tts`; requests now fail fast with actionable 502 when the returned final URL is unreachable/empty.
 - Added new `/debug/final_video` endpoint to return transport diagnostics plus MP4 probe metadata for a supplied URL.

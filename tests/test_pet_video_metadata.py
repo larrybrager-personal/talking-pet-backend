@@ -81,7 +81,10 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
             ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
-            patch("main.prepare_video_for_upload", return_value=b"compressed-video"),
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed-video", {"meets_target": True}),
+            ),
             patch("main.build_storage_key", return_value="videos/final.mp4"),
             patch("main.insert_pet_video", new_callable=AsyncMock) as mock_insert,
             patch(
@@ -148,7 +151,10 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "main.supabase_upload",
                 new_callable=AsyncMock,
             ) as mock_upload,
-            patch("main.prepare_video_for_upload", return_value=b"compressed-video"),
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed-video", {"meets_target": True}),
+            ),
             patch("main.insert_pet_video", new_callable=AsyncMock) as mock_insert,
             patch(
                 "main.collect_video_delivery_debug", new_callable=AsyncMock
@@ -211,7 +217,10 @@ class ModelParamsAllowlistTest(unittest.IsolatedAsyncioTestCase):
             ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
-            patch("main.prepare_video_for_upload", return_value=b"compressed-video"),
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed-video", {"meets_target": True}),
+            ),
             patch("main.build_storage_key", return_value="videos/final.mp4"),
             patch("main.insert_pet_video", new_callable=AsyncMock),
             patch(
@@ -243,7 +252,10 @@ class FinalVideoDebugTest(unittest.IsolatedAsyncioTestCase):
             ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
-            patch("main.prepare_video_for_upload", return_value=b"compressed-video"),
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed-video", {"meets_target": True}),
+            ),
             patch("main.build_storage_key", return_value="videos/final.mp4"),
             patch("main.insert_pet_video", new_callable=AsyncMock),
             patch(
@@ -280,6 +292,29 @@ class FinalVideoDebugTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["head_status"], 200)
         self.assertEqual(result["downloaded_bytes"], 3)
         self.assertEqual(result["probe"], {"is_valid_mp4": True})
+
+    async def test_debug_final_video_includes_compression_analysis_when_requested(self):
+        req = main.FinalVideoDebugRequest(
+            url="https://public.final/video.mp4", include_compression_debug=True
+        )
+
+        with (
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_collect,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch("main.inspect_video_bytes", return_value={"is_valid_mp4": True}),
+            patch(
+                "main.analyze_video_compression",
+                return_value={"meets_target": True, "attempts": []},
+            ),
+        ):
+            mock_collect.return_value = {"head_status": 200, "content_length": 111}
+            mock_fetch.return_value = b"abc"
+
+            result = await main.debug_final_video(req)
+
+        self.assertEqual(result["compression"], {"meets_target": True, "attempts": []})
 
 
 if __name__ == "__main__":

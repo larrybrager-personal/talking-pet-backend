@@ -1,5 +1,8 @@
 # Known Gaps / Follow-ups
 
+- Add frontend reference UI component for rendering `/debug/final_video` diagnostics with copy-to-clipboard support for support tickets.
+- Extend final video diagnostics to include browser-playability checks (e.g., MediaSource/HTML5 video test harness) instead of transport/container checks only.
+- Add redaction filters for structured logs if future debug payloads include user-provided prompt/script fields.
 - Add dedicated tests for Supabase profile tier lookup success/failure paths with mocked HTTP client.
 - Add explicit endpoint tests for `/jobs_prompt_only` and `/jobs_prompt_tts` that mock Replicate create calls and assert duration normalization for every model with enum-limited durations (especially Wan 2.6 family).
 - Add endpoint-level assertions for resolution normalization passed into Replicate payloads by model family.

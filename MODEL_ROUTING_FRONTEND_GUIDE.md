@@ -89,3 +89,43 @@ Treat `resolved` values from `POST /resolve_model` as source-of-truth preview va
 - **500**: backend configuration/service errors.
 
 Show actionable user copy for 400 errors and retry guidance for transient provider failures.
+
+
+## 9) Frontend changes needed for actionable debug logs
+
+When a generation call fails with status `502` and message like:
+`Final video could not be validated for playback. Use /debug/final_video for details.`
+
+Implement this client flow:
+1. Capture the returned `final_url` from a successful response (or from your job state if available).
+2. Call `POST /debug/final_video` with:
+   ```json
+   {
+     "url": "<final_url>",
+     "include_compression_debug": true
+   }
+   ```
+3. Render a developer-only diagnostics panel with these fields:
+   - delivery: `head_status`, `content_type`, `content_length`, `range_status`, `accept_ranges`, `content_range`
+   - container/codec: `probe.is_valid_mp4`, `probe.container`, `probe.video_codec`, `probe.audio_codec`, `probe.width`, `probe.height`, `probe.duration`
+   - compression: `compression.target_bytes`, `compression.original_bytes`, `compression.final_bytes`, `compression.meets_target`, plus each `compression.attempts[]` row (`crf`, `output_bytes`, `improved`, `error`)
+
+### Minimal frontend pseudo-code
+
+```js
+async function loadFinalVideoDiagnostics(base, finalUrl) {
+  const res = await fetch(`${base}/debug/final_video`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      url: finalUrl,
+      include_compression_debug: true,
+    }),
+  });
+  const data = await res.json();
+  return data;
+}
+```
+
+### Does this include debugging of video compression?
+Yes. `include_compression_debug: true` adds compression-attempt diagnostics so the UI can verify whether the uploaded video was already under target or required CRF passes, and whether it still missed the configured size target.

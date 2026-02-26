@@ -28,7 +28,10 @@ class PrepareVideoForUploadTest(unittest.TestCase):
     def test_raises_when_still_too_large_after_attempts(self):
         with (
             patch("main.VIDEO_UPLOAD_TARGET_BYTES", 10),
-            patch("main._compress_video_bytes", side_effect=[b"x" * 20, b"x" * 20, b"x" * 20]),
+            patch(
+                "main._compress_video_bytes",
+                side_effect=[b"x" * 20, b"x" * 20, b"x" * 20],
+            ),
         ):
             with self.assertRaises(HTTPException) as exc:
                 main.prepare_video_for_upload(b"x" * 20)

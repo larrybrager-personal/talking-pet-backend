@@ -23,6 +23,24 @@ class IntentResolutionResult(dict):
     """Small typed dict-like container for the resolved routing payload."""
 
 
+def normalize_quality(
+    quality: str | None,
+) -> str:
+    """Normalize legacy quality aliases to supported routing quality tiers."""
+
+    normalized = str(quality or "fast").strip().lower()
+    quality_aliases = {
+        "best": "quality",
+        "high": "quality",
+        "medium": "balanced",
+        "low": "fast",
+    }
+    normalized = quality_aliases.get(normalized, normalized)
+    if normalized not in {"fast", "balanced", "cheap", "quality"}:
+        return "fast"
+    return normalized
+
+
 def normalize_video_model(model: str | None) -> str:
     """Normalize legacy or unknown model ids to a supported model slug."""
 
@@ -149,9 +167,7 @@ async def resolve_model_for_intent(intent: dict[str, Any]) -> IntentResolutionRe
     Legacy speech-to-video model wan-video/wan-2.2-s2v is manual-override only.
     """
 
-    requested_quality = str(intent.get("quality") or "fast").strip().lower()
-    if requested_quality not in {"fast", "balanced", "cheap", "quality"}:
-        requested_quality = "fast"
+    requested_quality = normalize_quality(intent.get("quality"))
 
     seconds = int(intent.get("seconds") or 6)
     resolution = str(intent.get("resolution") or "768p")
@@ -196,10 +212,49 @@ async def resolve_model_for_intent(intent: dict[str, Any]) -> IntentResolutionRe
 def apply_allowed_model_params(
     model_slug: str, model_params: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Filter client model params to tunable allowlist for a given model."""
+    """Filter and validate client model params against model tunable specs."""
 
     if not model_params:
         return {}
+
     config = SUPPORTED_MODELS[model_slug]
-    allowed_keys = {item["key"] for item in config.get("tunable_params", [])}
-    return {key: value for key, value in model_params.items() if key in allowed_keys}
+    tunables = {item["key"]: item for item in config.get("tunable_params", [])}
+
+    normalized: dict[str, Any] = {}
+    for key, value in model_params.items():
+        spec = tunables.get(key)
+        if not spec:
+            continue
+
+        spec_type = spec.get("type")
+        if spec_type == "boolean":
+            if isinstance(value, bool):
+                normalized[key] = value
+            continue
+
+        if spec_type == "enum":
+            options = {item.get("value") for item in spec.get("options", [])}
+            if value in options:
+                normalized[key] = value
+            continue
+
+        if spec_type == "number":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+
+            min_value = spec.get("min")
+            max_value = spec.get("max")
+            step = spec.get("step")
+            if min_value is not None and value < min_value:
+                continue
+            if max_value is not None and value > max_value:
+                continue
+            if step:
+                base = min_value if min_value is not None else 0
+                remainder = (float(value) - float(base)) / float(step)
+                if abs(remainder - round(remainder)) > 1e-9:
+                    continue
+
+            normalized[key] = int(value) if isinstance(value, int) else float(value)
+
+    return normalized

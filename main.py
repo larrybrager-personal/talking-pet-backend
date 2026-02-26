@@ -4,15 +4,15 @@ Minimal FastAPI backend (cleaned) for Talking Pet MVP.
 - Keeps one debug helper: /debug/head to inspect public file headers
 """
 
+import asyncio
 import os
 import secrets
-import time
 import uuid
 import tempfile
 import shutil
 import subprocess
 from datetime import datetime, timezone
-from typing import Any, Literal, Tuple
+from typing import Any, Tuple
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -30,6 +30,7 @@ from model_routing import (
     get_default_video_model,
     normalize_video_model,
     resolve_model_for_intent,
+    normalize_quality,
 )
 
 # ===== Environment =====
@@ -229,24 +230,6 @@ def _resolve_generation_settings(
         "resolution": resolved_resolution,
         "quality": quality,
     }
-
-
-def normalize_quality(
-    quality: str | None,
-) -> Literal["fast", "balanced", "cheap", "quality"]:
-    """Normalize quality aliases from clients to backend-supported quality tiers."""
-
-    normalized = str(quality or "fast").strip().lower()
-    quality_aliases = {
-        "best": "quality",
-        "high": "quality",
-        "medium": "balanced",
-        "low": "fast",
-    }
-    normalized = quality_aliases.get(normalized, normalized)
-    if normalized not in {"fast", "balanced", "cheap", "quality"}:
-        return "fast"
-    return normalized  # type: ignore[return-value]
 
 
 def get_model_config(model: str) -> dict:
@@ -572,7 +555,7 @@ async def replicate_video_from_prompt(
                 if isinstance(output, str):
                     return output
                 raise HTTPException(500, "Replicate missing output URL")
-            time.sleep(2)
+            await asyncio.sleep(2)
 
 
 async def generate_video_from_prompt(

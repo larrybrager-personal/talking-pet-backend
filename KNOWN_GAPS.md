@@ -1,6 +1,5 @@
 # Known Gaps / Follow-ups
 
-- Add stronger validation for tunable param value ranges/types (currently key-based allowlist only).
 - Add dedicated tests for Supabase profile tier lookup success/failure paths with mocked HTTP client.
 - Add explicit endpoint tests for `/jobs_prompt_only` and `/jobs_prompt_tts` that mock Replicate create calls and assert duration normalization for every model with enum-limited durations (especially Wan 2.6 family).
 - Add endpoint-level assertions for resolution normalization passed into Replicate payloads by model family.
@@ -8,3 +7,4 @@
 - Evaluate whether additional request correlation metadata (request IDs) should be surfaced in responses/logging.
 - Evaluate if plan-tier caching should be introduced for repeated profile lookups to reduce Supabase round-trips.
 - Consider consolidating quality normalization inside `model_routing` as a shared utility to remove duplicate alias logic between endpoint handlers and routing internals.
+- Add stricter URL validation for `image_url` and `HeadRequest.url` to reject malformed/unsafe schemes at request parsing time.

@@ -22,8 +22,12 @@ class StorageHelpersTestCase(unittest.TestCase):
         self.assertEqual(exc.exception.status_code, 400)
 
     def test_build_storage_key_scopes_to_prefix(self):
-        key = build_storage_key("users/00000000-0000-0000-0000-000000000000", "videos", "mp4")
-        self.assertTrue(key.startswith("users/00000000-0000-0000-0000-000000000000/videos/"))
+        key = build_storage_key(
+            "users/00000000-0000-0000-0000-000000000000", "videos", "mp4"
+        )
+        self.assertTrue(
+            key.startswith("users/00000000-0000-0000-0000-000000000000/videos/")
+        )
         self.assertTrue(key.endswith(".mp4"))
 
 

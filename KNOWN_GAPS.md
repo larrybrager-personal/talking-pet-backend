@@ -7,3 +7,4 @@
 - Add API docs examples for all advanced request fields (`quality`, `fps`, `model_override`, `model_params`, `user_context.plan_tier`).
 - Evaluate whether additional request correlation metadata (request IDs) should be surfaced in responses/logging.
 - Evaluate if plan-tier caching should be introduced for repeated profile lookups to reduce Supabase round-trips.
+- Consider consolidating quality normalization inside `model_routing` as a shared utility to remove duplicate alias logic between endpoint handlers and routing internals.

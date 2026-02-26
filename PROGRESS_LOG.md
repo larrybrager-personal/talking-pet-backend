@@ -18,3 +18,11 @@
 - Extended tests to assert override duration normalization and updated routing expectations for Wan 2.6 duration snapping.
 - Refreshed repository documentation (`README.md`, frontend routing guide, known-gaps log) so human and AI operators can follow request flow, model routing, normalization, and operational runbooks without reading source first.
 - Clarified endpoint examples to include advanced routing fields and user context.
+
+## 2026-02-26
+- Added quality normalization in `main.py` (`normalize_quality`) so legacy and UI aliases (`best`, `high`, `medium`, `low`) map to supported tiers and unknown values safely default to `fast`.
+- Relaxed request schema quality typing from strict literals to `str` in `/resolve_model`, `/jobs_prompt_only`, and `/jobs_prompt_tts` request models to avoid 422 responses for legacy quality values.
+- Applied normalized quality handling across `/resolve_model` and `_resolve_job_model` so downstream routing and resolved payloads are consistent.
+- Extended `/resolve_model` response contract to include `resolved_model_slug` while preserving existing `model` for backward compatibility.
+- Updated `/models` response mapping to expose tunable parameter `description` (derived from `help`) without mutating global model registry metadata.
+- Added endpoint tests covering legacy `quality="best"` normalization, `resolved_model_slug` presence, and `tunable_params[].description` alias behavior.

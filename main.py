@@ -111,7 +111,7 @@ class ModelIntentRequest(BaseModel):
 
     seconds: int = 6
     resolution: str = "768p"
-    quality: Literal["fast", "balanced", "cheap", "quality"] = "fast"
+    quality: str = "fast"
     fps: int | None = None
     has_audio: bool = False
     model_override: str | None = None
@@ -134,7 +134,7 @@ class JobPromptOnly(BaseModel):
     prompt: str
     seconds: int = 6
     resolution: str = "768p"
-    quality: Literal["fast", "balanced", "cheap", "quality"] = "fast"
+    quality: str = "fast"
     fps: int | None = None
     model: str | None = None
     model_override: str | None = None
@@ -165,7 +165,7 @@ class JobPromptTTS(BaseModel):
     voice_id: str
     seconds: int = 6
     resolution: str = "768p"
-    quality: Literal["fast", "balanced", "cheap", "quality"] = "fast"
+    quality: str = "fast"
     fps: int | None = None
     model: str | None = None
     model_override: str | None = None
@@ -229,6 +229,24 @@ def _resolve_generation_settings(
         "resolution": resolved_resolution,
         "quality": quality,
     }
+
+
+def normalize_quality(
+    quality: str | None,
+) -> Literal["fast", "balanced", "cheap", "quality"]:
+    """Normalize quality aliases from clients to backend-supported quality tiers."""
+
+    normalized = str(quality or "fast").strip().lower()
+    quality_aliases = {
+        "best": "quality",
+        "high": "quality",
+        "medium": "balanced",
+        "low": "fast",
+    }
+    normalized = quality_aliases.get(normalized, normalized)
+    if normalized not in {"fast", "balanced", "cheap", "quality"}:
+        return "fast"
+    return normalized  # type: ignore[return-value]
 
 
 def get_model_config(model: str) -> dict:
@@ -629,6 +647,18 @@ async def health(_: None = Depends(require_auth)):
 @app.get("/models")
 async def list_supported_models(_: None = Depends(require_auth)):
     """List all supported i2v models and routing metadata."""
+
+    def _serialize_tunable_params(
+        tunable_params: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        transformed_params: list[dict[str, Any]] = []
+        for tunable_param in tunable_params:
+            transformed_param = tunable_param.copy()
+            if "help" in transformed_param and "description" not in transformed_param:
+                transformed_param["description"] = transformed_param["help"]
+            transformed_params.append(transformed_param)
+        return transformed_params
+
     models = {}
     for model_id, config in SUPPORTED_MODELS.items():
         models[model_id] = {
@@ -637,7 +667,9 @@ async def list_supported_models(_: None = Depends(require_auth)):
             "quality_label": config["quality_label"],
             "blurb": config["blurb"],
             "capabilities": config["capabilities"],
-            "tunable_params": config.get("tunable_params", []),
+            "tunable_params": _serialize_tunable_params(
+                config.get("tunable_params", [])
+            ),
             "supported_durations": config.get("supported_durations", []),
             "supported_fps": config.get("supported_fps", []),
             "supported_resolutions": config.get("supported_resolutions", []),
@@ -654,8 +686,11 @@ async def list_supported_models(_: None = Depends(require_auth)):
 async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)):
     """Resolve model selection from high-level user intent."""
 
+    normalized_quality = normalize_quality(req.quality)
+
     override = req.model_override
     intent = to_model_dict(req)
+    intent["quality"] = normalized_quality
 
     if override:
         model = normalize_video_model(override)
@@ -665,7 +700,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             seconds=req.seconds,
             resolution=req.resolution,
             fps=req.fps,
-            quality=req.quality,
+            quality=normalized_quality,
         )
         meta = {
             "name": config["name"],
@@ -679,6 +714,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
         }
         return {
             "model": model,
+            "resolved_model_slug": model,
             "meta": meta,
             "resolved": {**resolved_settings},
         }
@@ -686,6 +722,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
     resolved = await resolve_model_for_intent(intent)
     return {
         "model": resolved["resolved_model_slug"],
+        "resolved_model_slug": resolved["resolved_model_slug"],
         "meta": resolved["resolved_meta"],
         "resolved": resolved["resolved"],
     }
@@ -703,6 +740,7 @@ async def _resolve_job_model(
     model_override: str | None,
     model_params: dict[str, Any] | None,
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    normalized_quality = normalize_quality(quality)
     override = model_override or model
     if override:
         chosen = normalize_video_model(override)
@@ -712,14 +750,14 @@ async def _resolve_job_model(
             seconds=seconds,
             resolution=resolution,
             fps=fps,
-            quality=quality,
+            quality=normalized_quality,
         )
     else:
         result = await resolve_model_for_intent(
             {
                 "seconds": seconds,
                 "resolution": resolution,
-                "quality": quality,
+                "quality": normalized_quality,
                 "fps": fps,
                 "has_audio": has_audio,
                 "user_context": to_model_dict(user_context) if user_context else None,

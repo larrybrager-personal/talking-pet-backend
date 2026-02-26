@@ -174,6 +174,24 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertIn("blurb", wan26_fast)
         self.assertIn("tunable_params", wan26_fast)
 
+    def test_tunable_params_include_description_alias_for_help(self):
+        response = self.client.get("/models")
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        models_with_tunables = [
+            model
+            for model in payload["supported_models"].values()
+            if model.get("tunable_params")
+        ]
+
+        self.assertTrue(models_with_tunables)
+        for model in models_with_tunables:
+            for param in model["tunable_params"]:
+                if "help" in param:
+                    self.assertIn("description", param)
+                    self.assertEqual(param["description"], param["help"])
+
     def test_models_endpoint_exposes_new_default(self):
         response = self.client.get("/models")
         self.assertEqual(response.status_code, 200)
@@ -223,10 +241,31 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("model", payload)
+        self.assertIn("resolved_model_slug", payload)
         self.assertIn("meta", payload)
         self.assertIn("resolved", payload)
         self.assertEqual(payload["resolved"]["seconds"], 5)
         self.assertIsNone(payload["resolved"]["fps"])
+
+    def test_resolve_model_normalizes_legacy_best_quality_alias(self):
+        response = self.client.post(
+            "/resolve_model",
+            json={
+                "seconds": 6,
+                "resolution": "768p",
+                "quality": "best",
+                "fps": 24,
+                "has_audio": False,
+                "model_override": "wan-video/wan2.6-i2v-flash",
+                "model_params": None,
+                "user_context": None,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["resolved"]["quality"], "quality")
+        self.assertTrue(payload["resolved_model_slug"])
 
 
 if __name__ == "__main__":

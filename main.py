@@ -326,6 +326,13 @@ def build_model_payload(
 
     payload = {"input": (input_params or {}).copy()}
 
+    if "fps" in param_mapping:
+        mapped_fps_key = param_mapping["fps"]
+        raw_fps = payload["input"].get("fps")
+        if raw_fps is not None and mapped_fps_key != "fps":
+            payload["input"].pop("fps", None)
+            payload["input"][mapped_fps_key] = raw_fps
+
     if "image_url" in param_mapping:
         payload["input"][param_mapping["image_url"]] = image_url
     if "prompt" in param_mapping:

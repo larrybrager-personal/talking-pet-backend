@@ -124,6 +124,20 @@ class BuildModelPayloadResolutionTestCase(unittest.TestCase):
         self.assertEqual(payload["input"]["frames_per_second"], 16)
         self.assertEqual(payload["input"]["num_frames"], 81)
 
+    def test_wan22_num_frames_conversion_uses_input_params_fps_alias(self):
+        payload = main.build_model_payload(
+            "wan-video/wan-2.2-5b-fast",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=5,
+            resolution="720p",
+            input_params={"fps": 24},
+        )
+
+        self.assertEqual(payload["input"]["frames_per_second"], 24)
+        self.assertEqual(payload["input"]["num_frames"], 121)
+        self.assertNotIn("fps", payload["input"])
+
 
 class ModelNormalizationTestCase(unittest.TestCase):
     def test_legacy_slugs_are_normalized(self):

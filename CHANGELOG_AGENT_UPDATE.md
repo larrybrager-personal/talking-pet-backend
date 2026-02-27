@@ -14,3 +14,9 @@
 - Extended payload building to support frame-count models (`num_frames`) with FPS-aware conversion and model-specific key mapping.
 - Updated muxing to explicitly map video stream from source video and audio stream from ElevenLabs audio (`-map 0:v:0 -map 1:a:0`).
 - Added focused unit tests for new payload mappings, Wan frame conversion, and mux command stream mapping.
+
+## 2026-02-27 - Resolve model payload compatibility
+- Added `/resolve_model` request alias support for both snake_case and legacy camelCase fields.
+- Added pydantic v1/v2-compatible request config (`populate by name`, `extra=ignore`) for resilient API parsing.
+- Added top-level `plan_tier` to `/resolve_model` responses for both override and routed selections.
+- Added tests validating camelCase request payload support and guaranteed `plan_tier` response presence.

@@ -87,6 +87,8 @@ Optional:
 - `TTS_MAX_CHARS` (default `600`)
 - `API_AUTH_ENABLED` (`true`/`false`, default `false`)
 - `API_AUTH_TOKEN` (required only when auth enabled)
+- `IDEMPOTENCY_POLL_INTERVAL_SEC` (default `1`)
+- `IDEMPOTENCY_MAX_WAIT_SEC` (default `900`)
 
 ---
 
@@ -154,7 +156,8 @@ Request (example):
   "model": null,
   "model_override": null,
   "model_params": {"fps": 24},
-  "user_context": {"id": "uuid", "plan_tier": "free"}
+  "user_context": {"id": "uuid", "plan_tier": "free"},
+  "request_id": "c8852fb3-6bfd-47f8-9634-dd9f53c208f2"
 }
 ```
 
@@ -177,7 +180,8 @@ Request (example):
   "model": null,
   "model_override": null,
   "model_params": {"mode": "pro"},
-  "user_context": {"id": "uuid", "plan_tier": "studio"}
+  "user_context": {"id": "uuid", "plan_tier": "studio"},
+  "request_id": "4eb3eb42-6b9f-4454-b64a-cb6b053f2895"
 }
 ```
 
@@ -254,3 +258,16 @@ pytest -q
 - `MODEL_ROUTING_FRONTEND_GUIDE.md`: frontend-oriented routing and payload guidance
 - `KNOWN_GAPS.md`: backlog of gaps/follow-ups
 - `PROGRESS_LOG.md`: timestamped change history
+
+
+## Request id idempotency
+
+`/jobs_prompt_only` and `/jobs_prompt_tts` support optional request idempotency with `request_id` (UUID).
+
+- No `request_id`: endpoint behaves as before (new run is started).
+- Existing `request_id` with `succeeded`: returns the stored response immediately (no new Replicate/ElevenLabs call).
+- Existing `request_id` with `processing`: request waits and polls until completion, then returns the same stored response.
+- Existing `request_id` with `failed`: returns HTTP 409 with the stored deterministic error and does not rerun.
+- Invalid `request_id`: backend ignores idempotency and processes normally.
+
+Backed by Supabase table `public.job_requests`; see migration SQL: `migrations/20260227_create_job_requests.sql`.

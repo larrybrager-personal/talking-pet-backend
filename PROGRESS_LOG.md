@@ -48,3 +48,10 @@
 - Added request-model config for pydantic v1/v2 compatibility with populate-by-name and ignored extra fields for backward-compatible payload handling.
 - Updated `/resolve_model` responses to always include a top-level `plan_tier` in both explicit override and automatic routing flows.
 - Added endpoint tests to verify camelCase payload acceptance and top-level `plan_tier` presence.
+
+## 2026-02-27
+- Added backend idempotency for `/jobs_prompt_only` and `/jobs_prompt_tts` keyed by optional `request_id`, including Supabase-backed single-flight dedupe, deterministic failed-request handling, and polling behavior for duplicate in-flight requests.
+- Added Supabase migration SQL for `job_requests` idempotency table and update timestamp trigger.
+- Added unit tests for deduped-success short-circuit, owner success update, and processing-to-succeeded polling behavior.
+- Updated README with idempotency request/response behavior and env controls (`IDEMPOTENCY_POLL_INTERVAL_SEC`, `IDEMPOTENCY_MAX_WAIT_SEC`).
+

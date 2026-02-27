@@ -70,6 +70,8 @@ API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "")
 TTS_OUTPUT_FORMAT = os.getenv("TTS_OUTPUT_FORMAT", "mp3_44100_64")
 TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "600"))
 VIDEO_UPLOAD_TARGET_BYTES = int(os.getenv("VIDEO_UPLOAD_TARGET_BYTES", "9500000"))
+IDEMPOTENCY_POLL_INTERVAL_SEC = float(os.getenv("IDEMPOTENCY_POLL_INTERVAL_SEC", "1"))
+IDEMPOTENCY_MAX_WAIT_SEC = float(os.getenv("IDEMPOTENCY_MAX_WAIT_SEC", "900"))
 ENABLE_FINAL_VIDEO_DEBUG = os.getenv("ENABLE_FINAL_VIDEO_DEBUG", "true").lower() in {
     "1",
     "true",
@@ -174,6 +176,7 @@ class JobPromptOnly(BaseModel):
     model_override: str | None = None
     model_params: dict[str, Any] | None = None
     user_context: UserContext | None = None
+    request_id: str | None = None
 
 
 class JobPromptTTS(BaseModel):
@@ -205,6 +208,7 @@ class JobPromptTTS(BaseModel):
     model_override: str | None = None
     model_params: dict[str, Any] | None = None
     user_context: UserContext | None = None
+    request_id: str | None = None
 
 
 class HeadRequest(BaseModel):
@@ -502,6 +506,158 @@ async def supabase_delete(object_path: str) -> None:
     except httpx.HTTPError:
         # Cleanup should not mask the originating exception.
         return
+
+
+async def get_job_request(request_id: str) -> dict[str, Any] | None:
+    """Fetch an idempotency record from Supabase by request id."""
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+        raise HTTPException(500, "Supabase env not set")
+
+    endpoint = f"{SUPABASE_URL}/rest/v1/job_requests"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "apikey": SUPABASE_SERVICE_ROLE,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            endpoint,
+            headers=headers,
+            params={"request_id": f"eq.{request_id}", "select": "*", "limit": 1},
+        )
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            response.status_code,
+            f"Supabase idempotency lookup failed: {response.text}",
+        )
+
+    rows = response.json()
+    return rows[0] if rows else None
+
+
+async def create_job_request_processing(
+    request_id: str, user_id: str | None, endpoint_name: str
+) -> bool:
+    """Attempt to claim an idempotent request id for processing."""
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+        raise HTTPException(500, "Supabase env not set")
+
+    endpoint = f"{SUPABASE_URL}/rest/v1/job_requests"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "apikey": SUPABASE_SERVICE_ROLE,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    payload = {
+        "request_id": request_id,
+        "user_id": user_id,
+        "endpoint": endpoint_name,
+        "status": "processing",
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(endpoint, headers=headers, json=payload)
+
+    if response.status_code in (200, 201):
+        return True
+    if response.status_code == 409:
+        return False
+    if response.status_code == 201 and response.text == "":
+        return True
+    if response.status_code == 204:
+        return True
+    if response.status_code >= 400:
+        raise HTTPException(
+            response.status_code,
+            f"Supabase idempotency insert failed: {response.text}",
+        )
+    return False
+
+
+async def update_job_request(
+    request_id: str,
+    status: str,
+    response_payload: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    """Persist idempotency completion state for an existing request."""
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+        raise HTTPException(500, "Supabase env not set")
+
+    endpoint = f"{SUPABASE_URL}/rest/v1/job_requests"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "apikey": SUPABASE_SERVICE_ROLE,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    payload: dict[str, Any] = {"status": status}
+    if response_payload is not None:
+        payload["response"] = response_payload
+    if error is not None:
+        payload["error"] = error
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        patch_response = await client.patch(
+            endpoint,
+            headers=headers,
+            params={"request_id": f"eq.{request_id}"},
+            json=payload,
+        )
+
+    if patch_response.status_code >= 400:
+        raise HTTPException(
+            patch_response.status_code,
+            f"Supabase idempotency update failed: {patch_response.text}",
+        )
+
+
+async def await_existing_job_request(request_id: str) -> dict[str, Any]:
+    """Wait for a processing idempotent request to finish and return stored response."""
+
+    elapsed = 0.0
+    while elapsed <= IDEMPOTENCY_MAX_WAIT_SEC:
+        row = await get_job_request(request_id)
+        if not row:
+            raise HTTPException(
+                409, "Existing request not found. Please retry with a new request_id."
+            )
+
+        status = row.get("status")
+        if status == "succeeded" and row.get("response"):
+            return row["response"]
+        if status == "failed":
+            raise HTTPException(
+                409,
+                row.get("error") or "Request previously failed for this request_id.",
+            )
+        if status != "processing":
+            raise HTTPException(409, f"Unexpected idempotency status '{status}'.")
+
+        await asyncio.sleep(IDEMPOTENCY_POLL_INTERVAL_SEC)
+        elapsed += IDEMPOTENCY_POLL_INTERVAL_SEC
+
+    raise HTTPException(409, "Request already in progress, try again later.")
+
+
+def _normalize_request_id(request_id: str | None) -> str | None:
+    """Return normalized UUID string for idempotency keys, else None."""
+
+    if not request_id:
+        return None
+    try:
+        return str(uuid.UUID(request_id))
+    except (ValueError, TypeError, AttributeError):
+        logger.warning(
+            "Ignoring invalid request_id for idempotency",
+            extra={"request_id": request_id},
+        )
+        return None
 
 
 async def insert_pet_video(
@@ -1197,6 +1353,26 @@ async def _resolve_job_model(
 @app.post("/jobs_prompt_only")
 async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_auth)):
     """Generate a video from a static image and text prompt."""
+    normalized_request_id = _normalize_request_id(req.request_id)
+    user_id = req.user_context.id if req.user_context else None
+
+    if normalized_request_id:
+        owner = await create_job_request_processing(
+            normalized_request_id, user_id, "/jobs_prompt_only"
+        )
+        logger.info(
+            "idempotency_request endpoint=/jobs_prompt_only request_id=%s owner=%s",
+            normalized_request_id,
+            owner,
+        )
+        if not owner:
+            existing_response = await await_existing_job_request(normalized_request_id)
+            logger.info(
+                "idempotency_request endpoint=/jobs_prompt_only request_id=%s owner=false deduped=true",
+                normalized_request_id,
+            )
+            return existing_response
+
     model, input_params, resolved = await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
@@ -1209,62 +1385,86 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         model_params=req.model_params,
     )
     prefix = resolve_user_storage_prefix(req.user_context)
-    user_id = req.user_context.id if req.user_context else None
-
-    video_url = await generate_video_from_prompt(
-        model,
-        req.image_url,
-        req.prompt,
-        resolved["seconds"],
-        resolved["resolution"],
-        fps=resolved.get("fps"),
-        input_params=input_params,
-    )
-    video_bytes = await fetch_binary(video_url)
-    upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
-        video_bytes
-    )
-    final_key = build_storage_key(prefix, "videos", "mp4")
-    final_url = await supabase_upload(upload_ready_bytes, final_key, "video/mp4")
 
     try:
-        await insert_pet_video(
-            user_id=user_id,
-            video_url=final_url,
-            image_url=req.image_url,
-            script=None,
-            prompt=req.prompt,
-            voice_id=None,
-            resolution=resolved["resolution"],
-            duration=resolved["seconds"],
-            model=model,
+        video_url = await generate_video_from_prompt(
+            model,
+            req.image_url,
+            req.prompt,
+            resolved["seconds"],
+            resolved["resolution"],
+            fps=resolved.get("fps"),
+            input_params=input_params,
         )
+        video_bytes = await fetch_binary(video_url)
+        upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
+            video_bytes
+        )
+        final_key = build_storage_key(prefix, "videos", "mp4")
+        final_url = await supabase_upload(upload_ready_bytes, final_key, "video/mp4")
 
-        if ENABLE_FINAL_VIDEO_DEBUG:
-            diagnostics = await collect_video_delivery_debug(final_url)
-            if compression_debug is not None:
+        try:
+            await insert_pet_video(
+                user_id=user_id,
+                video_url=final_url,
+                image_url=req.image_url,
+                script=None,
+                prompt=req.prompt,
+                voice_id=None,
+                resolution=resolved["resolution"],
+                duration=resolved["seconds"],
+                model=model,
+            )
+
+            if ENABLE_FINAL_VIDEO_DEBUG:
+                diagnostics = await collect_video_delivery_debug(final_url)
+                if compression_debug is not None:
+                    diagnostics["compression"] = compression_debug
                 diagnostics["compression"] = compression_debug
-            diagnostics["compression"] = compression_debug
-            if diagnostics.get("head_status", 0) >= 400:
-                _raise_final_video_error(
-                    "Uploaded final video URL is not publicly reachable.",
-                    final_url=final_url,
-                    details=diagnostics,
-                )
-            if diagnostics.get("content_length", 0) <= 0:
-                _raise_final_video_error(
-                    "Uploaded final video appears empty.",
-                    final_url=final_url,
-                    details=diagnostics,
-                )
-    except HTTPException:
-        await supabase_delete(final_key)
-        raise
-    except Exception:
-        await supabase_delete(final_key)
-        raise
+                if diagnostics.get("head_status", 0) >= 400:
+                    _raise_final_video_error(
+                        "Uploaded final video URL is not publicly reachable.",
+                        final_url=final_url,
+                        details=diagnostics,
+                    )
+                if diagnostics.get("content_length", 0) <= 0:
+                    _raise_final_video_error(
+                        "Uploaded final video appears empty.",
+                        final_url=final_url,
+                        details=diagnostics,
+                    )
+        except HTTPException:
+            await supabase_delete(final_key)
+            raise
+        except Exception:
+            await supabase_delete(final_key)
+            raise
 
-    return {"video_url": video_url, "final_url": final_url}
+        response_payload = {"video_url": video_url, "final_url": final_url}
+        if normalized_request_id:
+            await update_job_request(
+                normalized_request_id,
+                "succeeded",
+                response_payload=response_payload,
+                error=None,
+            )
+        return response_payload
+    except HTTPException as exc:
+        if normalized_request_id:
+            await update_job_request(
+                normalized_request_id,
+                "failed",
+                error=str(exc.detail),
+            )
+        raise
+    except Exception as exc:
+        if normalized_request_id:
+            await update_job_request(
+                normalized_request_id,
+                "failed",
+                error="Unexpected server error while processing this request_id.",
+            )
+        raise exc
 
 
 @app.post("/jobs_prompt_tts")
@@ -1272,6 +1472,26 @@ async def create_job_with_prompt_and_tts(
     req: JobPromptTTS, _: None = Depends(require_auth)
 ):
     """Generate a video with synchronized speech."""
+    normalized_request_id = _normalize_request_id(req.request_id)
+    user_id = req.user_context.id if req.user_context else None
+
+    if normalized_request_id:
+        owner = await create_job_request_processing(
+            normalized_request_id, user_id, "/jobs_prompt_tts"
+        )
+        logger.info(
+            "idempotency_request endpoint=/jobs_prompt_tts request_id=%s owner=%s",
+            normalized_request_id,
+            owner,
+        )
+        if not owner:
+            existing_response = await await_existing_job_request(normalized_request_id)
+            logger.info(
+                "idempotency_request endpoint=/jobs_prompt_tts request_id=%s owner=false deduped=true",
+                normalized_request_id,
+            )
+            return existing_response
+
     model, input_params, resolved = await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
@@ -1284,18 +1504,18 @@ async def create_job_with_prompt_and_tts(
         model_params=req.model_params,
     )
     prefix = resolve_user_storage_prefix(req.user_context)
-    user_id = req.user_context.id if req.user_context else None
-
-    mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
-    audio_key = build_storage_key(prefix, "audio", "mp3")
-    audio_public_url = await supabase_upload(mp3_bytes, audio_key, "audio/mpeg")
 
     final_key: str | None = None
-    final_url: str | None = None
-    video_url: str | None = None
-    compression_debug: dict[str, Any] | None = None
+    audio_key: str | None = None
 
     try:
+        mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
+        audio_key = build_storage_key(prefix, "audio", "mp3")
+        audio_public_url = await supabase_upload(mp3_bytes, audio_key, "audio/mpeg")
+
+        final_url: str | None = None
+        video_url: str | None = None
+
         if get_model_config(model)["capabilities"].get("supportsAudioIn"):
             video_url = await generate_video_from_prompt(
                 model,
@@ -1309,8 +1529,8 @@ async def create_job_with_prompt_and_tts(
             )
             final_key = build_storage_key(prefix, "videos", "mp4")
             final_bytes = await fetch_binary(video_url)
-            upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
-                final_bytes
+            upload_ready_bytes, _compression_debug = (
+                prepare_video_for_upload_with_debug(final_bytes)
             )
             final_url = await supabase_upload(
                 upload_ready_bytes, final_key, "video/mp4"
@@ -1327,8 +1547,8 @@ async def create_job_with_prompt_and_tts(
             )
 
             final_bytes = await mux_video_audio(video_url, audio_public_url)
-            upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
-                final_bytes
+            upload_ready_bytes, _compression_debug = (
+                prepare_video_for_upload_with_debug(final_bytes)
             )
             final_key = build_storage_key(prefix, "videos", "mp4")
             final_url = await supabase_upload(
@@ -1361,17 +1581,45 @@ async def create_job_with_prompt_and_tts(
                     final_url=final_url,
                     details=diagnostics,
                 )
+
+        response_payload = {
+            "audio_url": audio_public_url,
+            "video_url": video_url,
+            "final_url": final_url,
+        }
+        if normalized_request_id:
+            await update_job_request(
+                normalized_request_id,
+                "succeeded",
+                response_payload=response_payload,
+                error=None,
+            )
+
+        return response_payload
+    except HTTPException as exc:
+        if final_key:
+            await supabase_delete(final_key)
+        if audio_key:
+            await supabase_delete(audio_key)
+        if normalized_request_id:
+            await update_job_request(
+                normalized_request_id,
+                "failed",
+                error=str(exc.detail),
+            )
+        raise
     except Exception:
         if final_key:
             await supabase_delete(final_key)
-        await supabase_delete(audio_key)
+        if audio_key:
+            await supabase_delete(audio_key)
+        if normalized_request_id:
+            await update_job_request(
+                normalized_request_id,
+                "failed",
+                error="Unexpected server error while processing this request_id.",
+            )
         raise
-
-    return {
-        "audio_url": audio_public_url,
-        "video_url": video_url,
-        "final_url": final_url,
-    }
 
 
 # ===== Debug =====

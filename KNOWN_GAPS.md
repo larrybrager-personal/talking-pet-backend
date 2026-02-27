@@ -14,3 +14,6 @@
 - Add integration coverage for real ffmpeg recompression path (currently unit-tested with mocks only) to validate output compatibility across source codecs.
 - Consider adaptive bitrate/scale-down policy (in addition to CRF changes) for very long clips that still exceed storage targets after compression attempts.
 - Expose `VIDEO_UPLOAD_TARGET_BYTES` in deployment docs/env templates so operations can align backend limits with Supabase bucket/project limits.
+- Verify Replicate version-level input schemas for newly added models in production and tune defaults/ranges per latest model version docs.
+- Revisit `kwaivgi/kling-v3-omni-video` once schema is confirmed; switch `runnable` to true and add payload tests.
+- Add endpoint-level tests for `/jobs_prompt_only` and `/jobs_prompt_tts` covering Wan 2.5 audio-input and VEED Fabric audio-driven flow with mocked Replicate responses.

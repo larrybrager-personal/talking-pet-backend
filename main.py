@@ -300,7 +300,13 @@ def get_model_config(model: str) -> dict:
             400,
             f"Unsupported model '{model}'. Supported models: {supported_list}",
         )
-    return SUPPORTED_MODELS[model]
+    config = SUPPORTED_MODELS[model]
+    if config.get("runnable", True) is False:
+        raise HTTPException(
+            400,
+            f"Model '{model}' is experimental and not yet runnable.",
+        )
+    return config
 
 
 def build_model_payload(
@@ -324,30 +330,56 @@ def build_model_payload(
         payload["input"][param_mapping["image_url"]] = image_url
     if "prompt" in param_mapping:
         payload["input"][param_mapping["prompt"]] = prompt
+
+    effective_fps: int | None = None
+    if "fps" in param_mapping:
+        mapped_fps_key = param_mapping["fps"]
+        if fps is not None:
+            effective_fps = fps
+        elif isinstance(payload["input"].get(mapped_fps_key), int):
+            effective_fps = payload["input"].get(mapped_fps_key)
+        elif isinstance(config.get("default_params", {}).get(mapped_fps_key), int):
+            effective_fps = config["default_params"].get(mapped_fps_key)
+
     if "seconds" in param_mapping:
-        if model.startswith("kwaivgi/kling-"):
-            payload["input"][param_mapping["seconds"]] = 5 if seconds <= 5 else 10
+        duration_key = param_mapping["seconds"]
+        if duration_key == "num_frames":
+            resolved_fps = effective_fps or 16
+            frame_count = (seconds * resolved_fps) + 1
+            frame_range = config.get("frame_count_range", {})
+            min_frames = int(frame_range.get("min", 81))
+            max_frames = int(frame_range.get("max", 121))
+            payload["input"][duration_key] = max(
+                min_frames, min(max_frames, frame_count)
+            )
+            if "fps" in param_mapping:
+                payload["input"][param_mapping["fps"]] = resolved_fps
+        elif model.startswith("kwaivgi/kling-"):
+            payload["input"][duration_key] = 5 if seconds <= 5 else 10
         else:
-            payload["input"][param_mapping["seconds"]] = seconds
+            payload["input"][duration_key] = seconds
+
     if "resolution" in param_mapping:
+        mapped_resolution_key = param_mapping["resolution"]
         if model.startswith("kwaivgi/kling-"):
             payload["input"].setdefault("mode", "standard")
             if resolution == "1080p":
                 payload["input"]["mode"] = "pro"
-                payload["input"][param_mapping["resolution"]] = "16:9"
+                payload["input"][mapped_resolution_key] = "16:9"
             elif resolution == "1024p":
-                payload["input"][param_mapping["resolution"]] = "16:9"
+                payload["input"][mapped_resolution_key] = "16:9"
             else:
-                payload["input"][param_mapping["resolution"]] = "1:1"
+                payload["input"][mapped_resolution_key] = "1:1"
         elif model.startswith("bytedance/seedance-1-"):
             if resolution in {"480p", "720p", "1080p"}:
-                payload["input"][param_mapping["resolution"]] = resolution
+                payload["input"][mapped_resolution_key] = resolution
             elif resolution == "1024p":
-                payload["input"][param_mapping["resolution"]] = "1080p"
+                payload["input"][mapped_resolution_key] = "1080p"
             else:
-                payload["input"][param_mapping["resolution"]] = "720p"
+                payload["input"][mapped_resolution_key] = "720p"
         else:
-            payload["input"][param_mapping["resolution"]] = resolution
+            payload["input"][mapped_resolution_key] = resolution
+
     if "audio_url" in param_mapping and audio_url:
         payload["input"][param_mapping["audio_url"]] = audio_url
     if fps is not None and "fps" in param_mapping:
@@ -717,6 +749,34 @@ async def generate_video_from_prompt(
     )
 
 
+def _build_mux_command(
+    ffmpeg_path: str, video_path: str, audio_path: str, output_path: str
+) -> list[str]:
+    """Build ffmpeg command arguments for deterministic video/audio stream mapping."""
+
+    return [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        video_path,
+        "-i",
+        audio_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-af",
+        # add 0.6s delay to audio start and 0.6s outro buffer
+        "adelay=600|600,apad=pad_dur=0.6",
+        "-shortest",
+        output_path,
+    ]
+
+
 async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
     """Combine a video and an audio track into a single MP4 file."""
 
@@ -738,23 +798,7 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
     import imageio_ffmpeg
 
     ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    cmd = [
-        ffmpeg_path,
-        "-y",
-        "-i",
-        vpath,
-        "-i",
-        apath,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-af",
-        # add 0.6s delay to audio start and 0.6s outro buffer
-        "adelay=600|600,apad=pad_dur=0.6",
-        "-shortest",
-        fpath,
-    ]
+    cmd = _build_mux_command(ffmpeg_path, vpath, apath, fpath)
     subprocess.run(cmd, check=True)
 
     final_bytes = open(fpath, "rb").read()
@@ -975,6 +1019,7 @@ async def list_supported_models(_: None = Depends(require_auth)):
             "supported_fps": config.get("supported_fps", []),
             "supported_resolutions": config.get("supported_resolutions", []),
             "min_plan_tier": config.get("min_plan_tier", "free"),
+            "runnable": config.get("runnable", True),
             "is_default": model_id == DEFAULT_MODEL,
         }
     return {
@@ -1028,6 +1073,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             "supported_resolutions": config.get("supported_resolutions", []),
             "tunable_params": config.get("tunable_params", []),
             "min_plan_tier": config.get("min_plan_tier", "free"),
+            "runnable": config.get("runnable", True),
             "plan_tier": plan_tier,
         }
         return {

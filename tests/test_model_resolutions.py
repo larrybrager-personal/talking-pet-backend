@@ -65,6 +65,79 @@ class BuildModelPayloadResolutionTestCase(unittest.TestCase):
         self.assertEqual(payload["input"]["mode"], "standard")
         self.assertEqual(payload["input"]["aspect_ratio"], "1:1")
 
+    def test_wan25_i2v_maps_audio_fields(self):
+        payload = main.build_model_payload(
+            "wan-video/wan-2.5-i2v",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=5,
+            resolution="1080p",
+            audio_url="https://example.com/audio.mp3",
+        )
+
+        self.assertEqual(payload["input"]["image"], "https://example.com/image.jpg")
+        self.assertEqual(payload["input"]["prompt"], "hello")
+        self.assertEqual(payload["input"]["duration"], 5)
+        self.assertEqual(payload["input"]["resolution"], "1080p")
+        self.assertEqual(payload["input"]["audio"], "https://example.com/audio.mp3")
+
+    def test_hailuo02_fast_uses_first_frame_image(self):
+        payload = main.build_model_payload(
+            "minimax/hailuo-02-fast",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=10,
+            resolution="512p",
+        )
+
+        self.assertEqual(
+            payload["input"]["first_frame_image"], "https://example.com/image.jpg"
+        )
+        self.assertEqual(payload["input"]["duration"], 10)
+        self.assertEqual(payload["input"]["resolution"], "512p")
+
+    def test_pixverse_maps_resolution_to_quality_and_tunables(self):
+        payload = main.build_model_payload(
+            "pixverse/pixverse-v4",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=5,
+            resolution="1080p",
+            input_params={"motion_mode": "smooth", "sound_effect_switch": True},
+        )
+
+        self.assertEqual(payload["input"]["quality"], "1080p")
+        self.assertEqual(payload["input"]["duration"], 5)
+        self.assertEqual(payload["input"]["motion_mode"], "smooth")
+        self.assertTrue(payload["input"]["sound_effect_switch"])
+
+    def test_wan22_num_frames_conversion_uses_fps(self):
+        payload = main.build_model_payload(
+            "wan-video/wan-2.2-5b-fast",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=5,
+            resolution="720p",
+            fps=16,
+        )
+
+        self.assertEqual(payload["input"]["frames_per_second"], 16)
+        self.assertEqual(payload["input"]["num_frames"], 81)
+
+    def test_wan22_num_frames_conversion_uses_input_params_fps_alias(self):
+        payload = main.build_model_payload(
+            "wan-video/wan-2.2-5b-fast",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=5,
+            resolution="720p",
+            input_params={"fps": 24},
+        )
+
+        self.assertEqual(payload["input"]["frames_per_second"], 24)
+        self.assertEqual(payload["input"]["num_frames"], 121)
+        self.assertNotIn("fps", payload["input"])
+
 
 class ModelNormalizationTestCase(unittest.TestCase):
     def test_legacy_slugs_are_normalized(self):
@@ -429,6 +502,15 @@ class ModelParamValidationTestCase(unittest.TestCase):
         )
 
         self.assertEqual(filtered, {})
+
+
+class MuxCommandTestCase(unittest.TestCase):
+    def test_mux_command_explicitly_maps_video_and_audio_streams(self):
+        cmd = main._build_mux_command("ffmpeg", "in.mp4", "in.mp3", "out.mp4")
+
+        self.assertIn("-map", cmd)
+        self.assertIn("0:v:0", cmd)
+        self.assertIn("1:a:0", cmd)
 
 
 class QualityNormalizationTestCase(unittest.TestCase):

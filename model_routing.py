@@ -201,6 +201,7 @@ def _meta_for_slug(model_slug: str) -> dict[str, Any]:
         "supported_resolutions": config["supported_resolutions"],
         "tunable_params": config["tunable_params"],
         "min_plan_tier": get_model_min_plan_tier(model_slug),
+        "runnable": config.get("runnable", True),
     }
 
 

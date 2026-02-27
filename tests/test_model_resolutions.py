@@ -318,6 +318,8 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertIn("resolved_model_slug", payload)
         self.assertIn("meta", payload)
         self.assertIn("resolved", payload)
+        self.assertIn("plan_tier", payload)
+        self.assertEqual(payload["plan_tier"], "free")
         self.assertEqual(payload["resolved"]["seconds"], 6)
         self.assertIsNone(payload["resolved"]["fps"])
         self.assertEqual(payload["resolved"]["resolution"], "480p")
@@ -341,6 +343,28 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["resolved"]["quality"], "quality")
         self.assertTrue(payload["resolved_model_slug"])
+
+    def test_resolve_model_accepts_camel_case_payload(self):
+        response = self.client.post(
+            "/resolve_model",
+            json={
+                "seconds": 6,
+                "resolution": "768p",
+                "quality": "fast",
+                "hasAudio": False,
+                "selectedOverrideModel": "bytedance/seedance-1-pro-fast",
+                "modelParams": {"fps": 24},
+                "userContext": {
+                    "id": "00000000-0000-0000-0000-000000000000",
+                    "planTier": "creator",
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["plan_tier"], "creator")
+        self.assertEqual(payload["meta"]["plan_tier"], "creator")
 
 
 class PlanTierAndFpsEnforcementTestCase(unittest.TestCase):

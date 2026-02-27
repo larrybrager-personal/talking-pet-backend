@@ -42,3 +42,9 @@
 - Replaced blocking `time.sleep` in Replicate polling loop with non-blocking `await asyncio.sleep` to avoid pausing the event loop during long-running prediction polls.
 - Expanded tests to cover quality normalization utility behavior and model-param validation edge cases (boolean, enum, numeric range, numeric step).
 
+
+## 2026-02-27
+- Added Pydantic alias compatibility for `/resolve_model` request parsing so snake_case and legacy camelCase keys are both accepted (`userContext`, `planTier`, `hasAudio`, `selectedOverrideModel`, `modelParams`) while keeping snake_case internal fields.
+- Added request-model config for pydantic v1/v2 compatibility with populate-by-name and ignored extra fields for backward-compatible payload handling.
+- Updated `/resolve_model` responses to always include a top-level `plan_tier` in both explicit override and automatic routing flows.
+- Added endpoint tests to verify camelCase payload acceptance and top-level `plan_tier` presence.

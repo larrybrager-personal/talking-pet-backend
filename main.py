@@ -19,7 +19,12 @@ from typing import Any, Tuple
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+try:  # Pydantic v2
+    from pydantic import ConfigDict
+except ImportError:  # Pydantic v1
+    ConfigDict = None
 
 from model_registry import (
     DEFAULT_MODEL,
@@ -88,6 +93,18 @@ app.add_middleware(
 logger = logging.getLogger("talking_pet_backend")
 
 
+class RequestModel(BaseModel):
+    """Pydantic v1/v2-compatible request base model config."""
+
+    if ConfigDict is not None:
+        model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    else:
+
+        class Config:
+            allow_population_by_field_name = True
+            extra = "ignore"
+
+
 # ===== Auth =====
 async def require_auth(request: Request) -> None:
     """Enforce bearer token authentication when enabled via configuration."""
@@ -114,26 +131,26 @@ async def require_auth(request: Request) -> None:
 
 
 # ===== Models =====
-class UserContext(BaseModel):
+class UserContext(RequestModel):
     """Authenticated user metadata forwarded by the studio frontend."""
 
     id: str
     email: str | None = None
     name: str | None = None
-    plan_tier: str | None = None
+    plan_tier: str | None = Field(default=None, alias="planTier")
 
 
-class ModelIntentRequest(BaseModel):
+class ModelIntentRequest(RequestModel):
     """High-level model routing intent used by automatic backend selection."""
 
     seconds: int = 6
     resolution: str = "768p"
     quality: str = "fast"
     fps: int | None = None
-    has_audio: bool = False
-    model_override: str | None = None
-    model_params: dict[str, Any] | None = None
-    user_context: UserContext | None = None
+    has_audio: bool = Field(default=False, alias="hasAudio")
+    model_override: str | None = Field(default=None, alias="selectedOverrideModel")
+    model_params: dict[str, Any] | None = Field(default=None, alias="modelParams")
+    user_context: UserContext | None = Field(default=None, alias="userContext")
 
 
 class JobPromptOnly(BaseModel):
@@ -1086,14 +1103,19 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
         return {
             "model": model,
             "resolved_model_slug": model,
+            "plan_tier": plan_tier,
             "meta": meta,
             "resolved": {**resolved_settings},
         }
 
     resolved = await resolve_model_for_intent(intent)
+    effective_plan_tier = resolved.get(
+        "plan_tier", resolved["resolved_meta"].get("plan_tier")
+    )
     return {
         "model": resolved["resolved_model_slug"],
         "resolved_model_slug": resolved["resolved_model_slug"],
+        "plan_tier": effective_plan_tier,
         "meta": resolved["resolved_meta"],
         "resolved": resolved["resolved"],
     }

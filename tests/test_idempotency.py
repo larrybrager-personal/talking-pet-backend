@@ -1,10 +1,28 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import main
+from fastapi import HTTPException
 
 
 class IdempotencyBehaviorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_prompt_only_invalid_model_fails_before_claiming_request_id(self):
+        req = main.JobPromptOnly(
+            image_url="https://example.com/pet.jpg",
+            prompt="Say hi",
+            model="wan-video/wan-2.2-s2v",
+            request_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+
+        with patch(
+            "main.create_job_request_processing", new_callable=AsyncMock
+        ) as mock_create_processing:
+            with self.assertRaises(HTTPException) as ctx:
+                await main.create_job_with_prompt(req)
+
+        self.assertIn(ctx.exception.status_code, (400, 403))
+        mock_create_processing.assert_not_awaited()
+
     async def test_prompt_only_returns_cached_succeeded_response_without_regenerating(
         self,
     ):
@@ -131,6 +149,40 @@ class IdempotencyBehaviorTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         mock_sleep.assert_awaited_once()
+
+    async def test_create_processing_rejects_cross_endpoint_conflict(self):
+        with (
+            patch("main.SUPABASE_URL", "https://supabase.local"),
+            patch("main.SUPABASE_SERVICE_ROLE", "service-role"),
+            patch("main.get_job_request", new_callable=AsyncMock) as mock_get,
+        ):
+            post_response = MagicMock()
+            post_response.status_code = 409
+
+            mock_client = AsyncMock()
+            mock_client.post.return_value = post_response
+
+            client_cm = AsyncMock()
+            client_cm.__aenter__.return_value = mock_client
+            client_cm.__aexit__.return_value = False
+
+            with patch("main.httpx.AsyncClient", return_value=client_cm):
+                mock_get.return_value = {
+                    "request_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    "endpoint": "/jobs_prompt_tts",
+                    "user_id": "user-2",
+                    "status": "succeeded",
+                }
+
+                with self.assertRaises(HTTPException) as ctx:
+                    await main.create_job_request_processing(
+                        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                        "user-1",
+                        "/jobs_prompt_only",
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("different endpoint or user scope", ctx.exception.detail)
 
 
 if __name__ == "__main__":

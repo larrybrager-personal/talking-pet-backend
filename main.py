@@ -565,6 +565,23 @@ async def create_job_request_processing(
     if response.status_code in (200, 201):
         return True
     if response.status_code == 409:
+        existing = await get_job_request(request_id)
+        if not existing:
+            raise HTTPException(
+                409,
+                "Conflicting request_id exists but could not be loaded. Retry with a new request_id.",
+            )
+
+        existing_endpoint = existing.get("endpoint")
+        existing_user_id = existing.get("user_id")
+        if existing_endpoint == endpoint_name and existing_user_id == user_id:
+            return False
+
+        raise HTTPException(
+            409,
+            "request_id already exists for a different endpoint or user scope. "
+            "Use a new request_id.",
+        )
         return False
     if response.status_code == 201 and response.text == "":
         return True
@@ -1356,6 +1373,19 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
 
+    model, input_params, resolved = await _resolve_job_model(
+        seconds=req.seconds,
+        resolution=req.resolution,
+        quality=req.quality,
+        fps=req.fps,
+        has_audio=False,
+        user_context=req.user_context,
+        model=req.model,
+        model_override=req.model_override,
+        model_params=req.model_params,
+    )
+    prefix = resolve_user_storage_prefix(req.user_context)
+
     if normalized_request_id:
         owner = await create_job_request_processing(
             normalized_request_id, user_id, "/jobs_prompt_only"
@@ -1372,19 +1402,6 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                 normalized_request_id,
             )
             return existing_response
-
-    model, input_params, resolved = await _resolve_job_model(
-        seconds=req.seconds,
-        resolution=req.resolution,
-        quality=req.quality,
-        fps=req.fps,
-        has_audio=False,
-        user_context=req.user_context,
-        model=req.model,
-        model_override=req.model_override,
-        model_params=req.model_params,
-    )
-    prefix = resolve_user_storage_prefix(req.user_context)
 
     try:
         video_url = await generate_video_from_prompt(
@@ -1475,6 +1492,19 @@ async def create_job_with_prompt_and_tts(
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
 
+    model, input_params, resolved = await _resolve_job_model(
+        seconds=req.seconds,
+        resolution=req.resolution,
+        quality=req.quality,
+        fps=req.fps,
+        has_audio=True,
+        user_context=req.user_context,
+        model=req.model,
+        model_override=req.model_override,
+        model_params=req.model_params,
+    )
+    prefix = resolve_user_storage_prefix(req.user_context)
+
     if normalized_request_id:
         owner = await create_job_request_processing(
             normalized_request_id, user_id, "/jobs_prompt_tts"
@@ -1491,19 +1521,6 @@ async def create_job_with_prompt_and_tts(
                 normalized_request_id,
             )
             return existing_response
-
-    model, input_params, resolved = await _resolve_job_model(
-        seconds=req.seconds,
-        resolution=req.resolution,
-        quality=req.quality,
-        fps=req.fps,
-        has_audio=True,
-        user_context=req.user_context,
-        model=req.model,
-        model_override=req.model_override,
-        model_params=req.model_params,
-    )
-    prefix = resolve_user_storage_prefix(req.user_context)
 
     final_key: str | None = None
     audio_key: str | None = None

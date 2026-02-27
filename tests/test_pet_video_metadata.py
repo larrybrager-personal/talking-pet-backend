@@ -72,7 +72,7 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
             seconds=6,
             resolution="768p",
             model=None,
-            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000"),
+            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000", plan_tier="creator"),
         )
 
         with (
@@ -111,7 +111,7 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "voice_id": None,
                 "resolution": "720p",
                 "duration": 5,
-                "model": main.PROMPT_ONLY_FALLBACK_MODEL,
+                "model": "wan-video/wan2.6-i2v-flash",
             },
         )
         self.assertEqual(
@@ -183,9 +183,9 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
                 "script": "Hello!",
                 "prompt": "Say hi",
                 "voice_id": "voice-123",
-                "resolution": "720p",
-                "duration": 5,
-                "model": main.DEFAULT_MODEL,
+                "resolution": "480p",
+                "duration": 6,
+                "model": "bytedance/seedance-1-pro-fast",
             },
         )
         self.assertEqual(
@@ -208,7 +208,7 @@ class ModelParamsAllowlistTest(unittest.IsolatedAsyncioTestCase):
             resolution="768p",
             model_override="wan-video/wan2.6-i2v-flash",
             model_params={"fps": 30, "unknown": "ignore-me"},
-            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000"),
+            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000", plan_tier="creator"),
         )
 
         with (

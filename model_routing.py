@@ -17,6 +17,13 @@ LEGACY_MODEL_ALIASES = {
 }
 
 PLAN_RANK = {"free": 0, "creator": 1, "studio": 2, "ultimate": 3}
+RESOLUTION_ORDER = ["480p", "512p", "720p", "768p", "1080p"]
+PLAN_MAX_RESOLUTION = {
+    "free": "480p",
+    "creator": "768p",
+    "studio": "1080p",
+    "ultimate": "1080p",
+}
 
 
 class IntentResolutionResult(dict):
@@ -98,6 +105,36 @@ def _is_plan_at_least(plan_tier: str, required_tier: str) -> bool:
     return PLAN_RANK.get(plan_tier, 0) >= PLAN_RANK.get(required_tier, 0)
 
 
+def get_model_min_plan_tier(model_slug: str) -> str:
+    model = SUPPORTED_MODELS.get(model_slug, {})
+    min_plan_tier = str(model.get("min_plan_tier") or "free").strip().lower()
+    if min_plan_tier not in PLAN_RANK:
+        return "free"
+    return min_plan_tier
+
+
+def is_model_allowed_for_plan(model_slug: str, plan_tier: str) -> bool:
+    return _is_plan_at_least(plan_tier, get_model_min_plan_tier(model_slug))
+
+
+def _resolution_rank(resolution: str) -> int:
+    try:
+        return RESOLUTION_ORDER.index(resolution)
+    except ValueError:
+        return -1
+
+
+def cap_resolution_for_plan(plan_tier: str, requested_resolution: str) -> str:
+    plan_cap = PLAN_MAX_RESOLUTION.get(plan_tier, PLAN_MAX_RESOLUTION["free"])
+    requested_rank = _resolution_rank(requested_resolution)
+    cap_rank = _resolution_rank(plan_cap)
+    if requested_rank == -1:
+        return plan_cap
+    if requested_rank <= cap_rank:
+        return requested_resolution
+    return plan_cap
+
+
 def _snap_seconds(requested_seconds: int, supported_durations: list[int]) -> int:
     if not supported_durations:
         return requested_seconds
@@ -108,17 +145,40 @@ def _snap_seconds(requested_seconds: int, supported_durations: list[int]) -> int
     return min(sorted_durations, key=lambda value: abs(value - requested_seconds))
 
 
-def _normalize_resolution(model_slug: str, resolution: str) -> str:
+def _normalize_resolution(
+    model_slug: str, resolution: str, plan_tier: str
+) -> str | None:
     supported = SUPPORTED_MODELS[model_slug].get("supported_resolutions", [])
     if not supported:
         return resolution
-    if resolution in supported:
-        return resolution
-    if resolution in {"1024p", "1080p"} and "1080p" in supported:
-        return "1080p"
-    if resolution in {"768p", "720p"} and "720p" in supported:
-        return "720p"
-    return supported[0]
+
+    capped_resolution = cap_resolution_for_plan(plan_tier, resolution)
+    plan_cap = PLAN_MAX_RESOLUTION.get(plan_tier, PLAN_MAX_RESOLUTION["free"])
+    cap_rank = _resolution_rank(plan_cap)
+
+    if capped_resolution in supported:
+        return capped_resolution
+
+    supported_not_above_cap = [
+        value
+        for value in supported
+        if _resolution_rank(value) != -1 and _resolution_rank(value) <= cap_rank
+    ]
+    if not supported_not_above_cap:
+        return None
+
+    capped_rank = _resolution_rank(capped_resolution)
+    if capped_rank == -1:
+        return max(supported_not_above_cap, key=_resolution_rank)
+
+    lower_or_equal = [
+        value
+        for value in supported_not_above_cap
+        if _resolution_rank(value) <= capped_rank
+    ]
+    if lower_or_equal:
+        return max(lower_or_equal, key=_resolution_rank)
+    return min(supported_not_above_cap, key=_resolution_rank)
 
 
 def _normalize_fps(requested_fps: int | None, supported_fps: list[int]) -> int | None:
@@ -140,10 +200,14 @@ def _meta_for_slug(model_slug: str) -> dict[str, Any]:
         "supported_fps": config["supported_fps"],
         "supported_resolutions": config["supported_resolutions"],
         "tunable_params": config["tunable_params"],
+        "min_plan_tier": get_model_min_plan_tier(model_slug),
     }
 
 
 def _pick_model_for_quality(quality: str, plan_tier: str) -> str:
+    if plan_tier == "free":
+        return "bytedance/seedance-1-pro-fast"
+
     if quality == "quality":
         if _is_plan_at_least(plan_tier, "studio"):
             return "kwaivgi/kling-v2.6"
@@ -186,7 +250,11 @@ async def resolve_model_for_intent(intent: dict[str, Any]) -> IntentResolutionRe
     resolved_seconds = _snap_seconds(
         seconds, model_config.get("supported_durations", [])
     )
-    resolved_resolution = _normalize_resolution(model_slug, resolution)
+    resolved_resolution = _normalize_resolution(model_slug, resolution, plan_tier)
+    if resolved_resolution is None:
+        raise ValueError(
+            f"No supported resolution for model {model_slug} within {plan_tier} plan limits"
+        )
     resolved_fps = _normalize_fps(fps, model_config.get("supported_fps", []))
 
     resolved_defaults = model_config.get("default_params", {}).copy()

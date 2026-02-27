@@ -16,6 +16,7 @@ SUPPORTED_MODELS = {
         "slug": "wan-video/wan2.6-i2v-flash",
         "name": "Wan 2.6 I2V Flash",
         "tier": "fast",
+        "min_plan_tier": "creator",
         "quality_label": "fast",
         "blurb": "Fastest turnaround for short image-to-video generations.",
         "capabilities": {
@@ -54,6 +55,7 @@ SUPPORTED_MODELS = {
         "slug": "wan-video/wan-2.6-i2v",
         "name": "Wan 2.6 I2V",
         "tier": "premium",
+        "min_plan_tier": "creator",
         "quality_label": "balanced",
         "blurb": "Balanced quality and latency for most standard requests.",
         "capabilities": {
@@ -92,6 +94,7 @@ SUPPORTED_MODELS = {
         "slug": "minimax/hailuo-2.3",
         "name": "Hailuo 2.3",
         "tier": "premium",
+        "min_plan_tier": "studio",
         "quality_label": "quality",
         "blurb": "High-fidelity motion output with slower runtime than flash models.",
         "capabilities": {
@@ -125,6 +128,7 @@ SUPPORTED_MODELS = {
         "slug": "minimax/hailuo-2.3-fast",
         "name": "Hailuo 2.3 Fast",
         "tier": "budget",
+        "min_plan_tier": "creator",
         "quality_label": "cheap",
         "blurb": "Lower-cost Hailuo profile for quick iteration.",
         "capabilities": {
@@ -158,6 +162,7 @@ SUPPORTED_MODELS = {
         "slug": "kwaivgi/kling-v2.6",
         "name": "Kling v2.6",
         "tier": "premium",
+        "min_plan_tier": "studio",
         "quality_label": "quality",
         "blurb": "Best premium visual fidelity for paid tiers.",
         "capabilities": {
@@ -195,6 +200,7 @@ SUPPORTED_MODELS = {
         "slug": "kwaivgi/kling-v2.5-turbo-pro",
         "name": "Kling v2.5 Turbo Pro",
         "tier": "fast",
+        "min_plan_tier": "studio",
         "quality_label": "balanced",
         "blurb": "Faster Kling profile when you want quality without full premium cost.",
         "capabilities": {
@@ -232,6 +238,7 @@ SUPPORTED_MODELS = {
         "slug": "wan-video/wan-2.2-s2v",
         "name": "Wan v2.2 S2V",
         "tier": "legacy",
+        "min_plan_tier": "creator",
         "quality_label": "balanced",
         "blurb": "Legacy speech-to-video path with native audio sync.",
         "capabilities": {
@@ -279,6 +286,7 @@ SUPPORTED_MODELS = {
         "slug": "bytedance/seedance-1-pro-fast",
         "name": "SeeDance-1 Pro Fast",
         "tier": "budget",
+        "min_plan_tier": "free",
         "quality_label": "cheap",
         "blurb": "Cost-efficient generations for budget-sensitive workloads.",
         "capabilities": {
@@ -325,6 +333,7 @@ SUPPORTED_MODELS = {
         "slug": "bytedance/seedance-1-pro",
         "name": "SeeDance-1 Pro",
         "tier": "premium",
+        "min_plan_tier": "creator",
         "quality_label": "quality",
         "blurb": "Higher-quality SeeDance profile at increased cost.",
         "capabilities": {

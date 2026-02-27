@@ -28,11 +28,16 @@ from model_registry import (
     VIDEO_MODEL_ROUTES,
 )
 from model_routing import (
+    PLAN_MAX_RESOLUTION,
     apply_allowed_model_params,
+    cap_resolution_for_plan,
     get_default_video_model,
+    get_model_min_plan_tier,
+    is_model_allowed_for_plan,
     normalize_video_model,
     resolve_model_for_intent,
     normalize_quality,
+    resolve_plan_tier,
 )
 
 # ===== Environment =====
@@ -212,11 +217,13 @@ def to_model_dict(model: BaseModel) -> dict[str, Any]:
 
 def _resolve_generation_settings(
     *,
+    model_slug: str,
     config: dict[str, Any],
     seconds: int,
     resolution: str,
     fps: int | None,
     quality: str,
+    plan_tier: str,
 ) -> dict[str, Any]:
     """Normalize generation settings to values supported by the selected model."""
 
@@ -229,19 +236,43 @@ def _resolve_generation_settings(
     else:
         resolved_seconds = seconds
 
+    requested_resolution = cap_resolution_for_plan(plan_tier, resolution)
     supported_resolutions = config.get("supported_resolutions", [])
-    if resolution in supported_resolutions:
-        resolved_resolution = resolution
-    elif resolution in {"768p", "720p"} and "720p" in supported_resolutions:
-        resolved_resolution = "720p"
-    elif resolution in {"1024p", "1080p"} and "1080p" in supported_resolutions:
-        resolved_resolution = "1080p"
+    if requested_resolution in supported_resolutions:
+        resolved_resolution = requested_resolution
     else:
+        resolution_order = ["480p", "512p", "720p", "768p", "1080p"]
+
+        def rank(value: str) -> int:
+            try:
+                return resolution_order.index(value)
+            except ValueError:
+                return -1
+
+        cap = PLAN_MAX_RESOLUTION.get(plan_tier, PLAN_MAX_RESOLUTION["free"])
+        cap_rank = rank(cap)
+        req_rank = rank(requested_resolution)
+        within_cap = [
+            value
+            for value in supported_resolutions
+            if rank(value) != -1 and rank(value) <= cap_rank
+        ]
+        if not within_cap:
+            raise HTTPException(
+                403,
+                "Requested model/resolution requires a higher plan. Please upgrade your plan tier.",
+            )
+
+        lower_or_equal = [value for value in within_cap if rank(value) <= req_rank]
         resolved_resolution = (
-            supported_resolutions[0] if supported_resolutions else resolution
+            max(lower_or_equal, key=rank)
+            if lower_or_equal
+            else min(within_cap, key=rank)
         )
 
-    resolved_fps = fps if fps in config.get("supported_fps", []) else None
+    supported_fps = config.get("supported_fps", [])
+    supports_fps = bool(supported_fps) and "fps" in config.get("param_mapping", {})
+    resolved_fps = fps if (supports_fps and fps in supported_fps) else None
 
     return {
         "seconds": resolved_seconds,
@@ -943,6 +974,7 @@ async def list_supported_models(_: None = Depends(require_auth)):
             "supported_durations": config.get("supported_durations", []),
             "supported_fps": config.get("supported_fps", []),
             "supported_resolutions": config.get("supported_resolutions", []),
+            "min_plan_tier": config.get("min_plan_tier", "free"),
             "is_default": model_id == DEFAULT_MODEL,
         }
     return {
@@ -957,20 +989,34 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
     """Resolve model selection from high-level user intent."""
 
     normalized_quality = normalize_quality(req.quality)
-
     override = req.model_override
     intent = to_model_dict(req)
     intent["quality"] = normalized_quality
 
+    plan_tier = await resolve_plan_tier(
+        to_model_dict(req.user_context) if req.user_context else None,
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE,
+    )
+
     if override:
         model = normalize_video_model(override)
+        if not is_model_allowed_for_plan(model, plan_tier):
+            required = get_model_min_plan_tier(model).capitalize()
+            raise HTTPException(
+                403,
+                f"This model requires {required}. Your plan is {plan_tier.capitalize()}.",
+            )
+
         config = get_model_config(model)
         resolved_settings = _resolve_generation_settings(
+            model_slug=model,
             config=config,
             seconds=req.seconds,
             resolution=req.resolution,
             fps=req.fps,
             quality=normalized_quality,
+            plan_tier=plan_tier,
         )
         meta = {
             "name": config["name"],
@@ -981,6 +1027,8 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             "supported_fps": config.get("supported_fps", []),
             "supported_resolutions": config.get("supported_resolutions", []),
             "tunable_params": config.get("tunable_params", []),
+            "min_plan_tier": config.get("min_plan_tier", "free"),
+            "plan_tier": plan_tier,
         }
         return {
             "model": model,
@@ -1012,15 +1060,29 @@ async def _resolve_job_model(
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
     normalized_quality = normalize_quality(quality)
     override = model_override or model
+    plan_tier = await resolve_plan_tier(
+        to_model_dict(user_context) if user_context else None,
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE,
+    )
+
     if override:
         chosen = normalize_video_model(override)
+        if not is_model_allowed_for_plan(chosen, plan_tier):
+            required = get_model_min_plan_tier(chosen).capitalize()
+            raise HTTPException(
+                403,
+                f"This model requires {required}. Your plan is {plan_tier.capitalize()}.",
+            )
         config = get_model_config(chosen)
         resolved = _resolve_generation_settings(
+            model_slug=chosen,
             config=config,
             seconds=seconds,
             resolution=resolution,
             fps=fps,
             quality=normalized_quality,
+            plan_tier=plan_tier,
         )
     else:
         result = await resolve_model_for_intent(
@@ -1034,6 +1096,11 @@ async def _resolve_job_model(
             }
         )
         chosen = result["resolved_model_slug"]
+        if not is_model_allowed_for_plan(chosen, plan_tier):
+            raise HTTPException(
+                500,
+                "Routing misconfiguration: selected model is not allowed for this plan.",
+            )
         config = get_model_config(chosen)
         resolved = result["resolved"]
 

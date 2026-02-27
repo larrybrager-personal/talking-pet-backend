@@ -112,10 +112,11 @@ class RoutingResolutionTestCase(unittest.IsolatedAsyncioTestCase):
                 }
             )
             self.assertEqual(
-                free_result["resolved_model_slug"], "wan-video/wan2.6-i2v-flash"
+                free_result["resolved_model_slug"], "bytedance/seedance-1-pro-fast"
             )
-            self.assertEqual(free_result["resolved"]["seconds"], 5)
-            self.assertEqual(free_result["resolved"]["fps"], 30)
+            self.assertEqual(free_result["resolved"]["seconds"], 6)
+            self.assertIsNone(free_result["resolved"]["fps"])
+            self.assertEqual(free_result["resolved"]["resolution"], "480p")
 
             mock_tier.return_value = "studio"
             studio_result = await main.resolve_model_for_intent(
@@ -147,8 +148,8 @@ class RoutingResolutionTestCase(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
-        self.assertEqual(result["resolved_model_slug"], "wan-video/wan2.6-i2v-flash")
-        self.assertEqual(result["resolved"]["resolution"], "720p")
+        self.assertEqual(result["resolved_model_slug"], "bytedance/seedance-1-pro-fast")
+        self.assertEqual(result["resolved"]["resolution"], "480p")
 
 
 class ModelsEndpointResolutionTestCase(unittest.TestCase):
@@ -173,6 +174,7 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertIn("supported_fps", wan26_fast)
         self.assertIn("blurb", wan26_fast)
         self.assertIn("tunable_params", wan26_fast)
+        self.assertIn("min_plan_tier", wan26_fast)
 
     def test_tunable_params_include_description_alias_for_help(self):
         response = self.client.get("/models")
@@ -199,25 +201,24 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["default_model"], "wan-video/wan2.6-i2v-flash")
 
-    def test_override_model_normalizes_resolution_for_backend(self):
-        response = self.client.post(
-            "/resolve_model",
-            json={
-                "seconds": 6,
-                "resolution": "768p",
-                "quality": "fast",
-                "fps": 24,
-                "has_audio": False,
-                "model_override": "wan-video/wan2.6-i2v-flash",
-                "model_params": None,
-                "user_context": None,
-            },
-        )
+    def test_override_model_rejects_when_plan_disallows_model(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "free"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "768p",
+                    "quality": "fast",
+                    "fps": 24,
+                    "has_audio": False,
+                    "model_override": "wan-video/wan2.6-i2v-flash",
+                    "model_params": None,
+                    "user_context": None,
+                },
+            )
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["resolved"]["resolution"], "720p")
-        self.assertEqual(payload["resolved"]["seconds"], 5)
+        self.assertEqual(response.status_code, 403)
 
     def test_resolve_model_endpoint_shape_and_normalization(self):
         with patch(
@@ -244,8 +245,9 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         self.assertIn("resolved_model_slug", payload)
         self.assertIn("meta", payload)
         self.assertIn("resolved", payload)
-        self.assertEqual(payload["resolved"]["seconds"], 5)
+        self.assertEqual(payload["resolved"]["seconds"], 6)
         self.assertIsNone(payload["resolved"]["fps"])
+        self.assertEqual(payload["resolved"]["resolution"], "480p")
 
     def test_resolve_model_normalizes_legacy_best_quality_alias(self):
         response = self.client.post(
@@ -256,7 +258,7 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
                 "quality": "best",
                 "fps": 24,
                 "has_audio": False,
-                "model_override": "wan-video/wan2.6-i2v-flash",
+                "model_override": "bytedance/seedance-1-pro-fast",
                 "model_params": None,
                 "user_context": None,
             },
@@ -266,6 +268,133 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["resolved"]["quality"], "quality")
         self.assertTrue(payload["resolved_model_slug"])
+
+
+class PlanTierAndFpsEnforcementTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._auth_enabled = main.API_AUTH_ENABLED
+        main.API_AUTH_ENABLED = False
+        self.client = TestClient(main.app)
+
+    def tearDown(self) -> None:
+        main.API_AUTH_ENABLED = self._auth_enabled
+
+    def test_creator_can_override_to_free_model(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "creator"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "1080p",
+                    "quality": "quality",
+                    "fps": 24,
+                    "has_audio": False,
+                    "model_override": "bytedance/seedance-1-pro-fast",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["resolved"]["resolution"], "720p")
+
+    def test_studio_can_override_to_creator_model(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "studio"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "1080p",
+                    "quality": "quality",
+                    "fps": 24,
+                    "has_audio": False,
+                    "model_override": "wan-video/wan2.6-i2v-flash",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+
+    def test_free_cannot_override_to_studio_model(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "free"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "1080p",
+                    "quality": "quality",
+                    "fps": 24,
+                    "has_audio": False,
+                    "model_override": "kwaivgi/kling-v2.6",
+                },
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_free_cap_applies_to_routed_model(self):
+        with patch(
+            "model_routing.resolve_plan_tier", new_callable=AsyncMock
+        ) as mock_tier:
+            mock_tier.return_value = "free"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "1080p",
+                    "quality": "fast",
+                    "fps": 24,
+                    "has_audio": False,
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["resolved"]["resolution"], "480p")
+
+    def test_free_override_without_480p_support_is_blocked(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "free"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "1080p",
+                    "quality": "fast",
+                    "fps": 30,
+                    "has_audio": False,
+                    "model_override": "wan-video/wan2.6-i2v-flash",
+                },
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_fps_supported_model_keeps_valid_value(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "creator"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "720p",
+                    "quality": "fast",
+                    "fps": 30,
+                    "has_audio": False,
+                    "model_override": "wan-video/wan2.6-i2v-flash",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["resolved"]["fps"], 30)
+
+    def test_fps_unsupported_value_is_dropped(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "creator"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "720p",
+                    "quality": "fast",
+                    "fps": 60,
+                    "has_audio": False,
+                    "model_override": "wan-video/wan2.6-i2v-flash",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["resolved"]["fps"])
 
 
 class ModelParamValidationTestCase(unittest.TestCase):

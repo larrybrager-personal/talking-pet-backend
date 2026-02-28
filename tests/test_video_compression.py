@@ -40,5 +40,18 @@ class PrepareVideoForUploadTest(unittest.TestCase):
         self.assertIn("too large", exc.exception.detail)
 
 
+class GetFfmpegPathTest(unittest.TestCase):
+    def test_returns_path_when_ffmpeg_available(self):
+        main.get_ffmpeg_path.cache_clear()
+        try:
+            ffmpeg_path = main.get_ffmpeg_path()
+        except HTTPException as exc:
+            if exc.status_code == 500 and "ffmpeg not available" in str(exc.detail):
+                self.skipTest("ffmpeg not available in test runtime")
+            raise
+
+        self.assertTrue(isinstance(ffmpeg_path, str) and len(ffmpeg_path) > 0)
+
+
 if __name__ == "__main__":
     unittest.main()

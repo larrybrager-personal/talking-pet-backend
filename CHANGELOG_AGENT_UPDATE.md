@@ -32,3 +32,9 @@
 - Documented canonical capability semantics in `GET /models`: `supportsAudioIn` (accepts external audio conditioning) and `generatesAudio` (may produce model-native audio).
 - Added compact endpoint response-shape tables for frontend typing stability.
 - Added endpoint contract tests that lock response key sets for `/jobs_prompt_only` and `/jobs_prompt_tts`, plus capability-flag presence/type checks on `/models`.
+
+## 2026-02-28 - ffmpeg runtime robustness on Render
+- Added `setuptools>=68` to prevent `pkg_resources` import errors when loading `imageio_ffmpeg` in production.
+- Introduced `get_ffmpeg_path()` with imageio-first, PATH fallback, and executable validation via `ffmpeg -version`.
+- Hardened muxing/compression paths to share ffmpeg resolution and return clear 500s (`ffmpeg not available in runtime`, `ffmpeg mux failed`) while logging actionable stderr diagnostics.
+- Added a focused unit test for ffmpeg-path resolution with skip behavior when ffmpeg is not present in CI/runtime.

@@ -13,6 +13,7 @@ import uuid
 import tempfile
 import shutil
 import subprocess
+from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Any, Tuple
 
@@ -1005,6 +1006,44 @@ def _build_mux_command(
     ]
 
 
+@lru_cache(maxsize=1)
+def get_ffmpeg_path() -> str:
+    """Resolve an ffmpeg binary path and validate it is runnable."""
+
+    ffmpeg_path = "ffmpeg"
+    try:
+        import imageio_ffmpeg
+
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:  # pragma: no cover - fallback path in production
+        logger.warning(
+            "imageio_ffmpeg unavailable, falling back to PATH ffmpeg: %s",
+            type(exc).__name__,
+        )
+
+    try:
+        subprocess.run(
+            [ffmpeg_path, "-version"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        logger.error("ffmpeg binary not found (path=%s)", ffmpeg_path)
+        raise HTTPException(500, "ffmpeg not available in runtime") from exc
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "ffmpeg -version failed (path=%s, stderr=%s)",
+            ffmpeg_path,
+            (exc.stderr or "").strip(),
+        )
+        raise HTTPException(500, "ffmpeg not available in runtime") from exc
+
+    logger.info("Using ffmpeg binary at path=%s", ffmpeg_path)
+    return ffmpeg_path
+
+
 async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
     """Combine a video and an audio track into a single MP4 file."""
 
@@ -1013,25 +1052,31 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
     apath = os.path.join(tmpdir, "in.mp3")
     fpath = os.path.join(tmpdir, "out.mp4")
 
-    async with httpx.AsyncClient() as client:
-        vr = await client.get(video_url)
-        vr.raise_for_status()
-        with open(vpath, "wb") as f:
-            f.write(vr.content)
-        ar = await client.get(audio_url)
-        ar.raise_for_status()
-        with open(apath, "wb") as f:
-            f.write(ar.content)
+    try:
+        async with httpx.AsyncClient() as client:
+            vr = await client.get(video_url)
+            vr.raise_for_status()
+            with open(vpath, "wb") as f:
+                f.write(vr.content)
+            ar = await client.get(audio_url)
+            ar.raise_for_status()
+            with open(apath, "wb") as f:
+                f.write(ar.content)
 
-    import imageio_ffmpeg
+        ffmpeg_path = get_ffmpeg_path()
+        cmd = _build_mux_command(ffmpeg_path, vpath, apath, fpath)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
 
-    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    cmd = _build_mux_command(ffmpeg_path, vpath, apath, fpath)
-    subprocess.run(cmd, check=True)
-
-    final_bytes = open(fpath, "rb").read()
-    shutil.rmtree(tmpdir)
-    return final_bytes
+        final_bytes = open(fpath, "rb").read()
+        return final_bytes
+    except FileNotFoundError as exc:
+        logger.error("ffmpeg executable not found during mux")
+        raise HTTPException(500, "ffmpeg not available in runtime") from exc
+    except subprocess.CalledProcessError as exc:
+        logger.error("ffmpeg mux failed: %s", (exc.stderr or "").strip())
+        raise HTTPException(500, "ffmpeg mux failed") from exc
+    finally:
+        shutil.rmtree(tmpdir)
 
 
 def _compress_video_bytes(video_bytes: bytes, crf: int) -> bytes:
@@ -1045,9 +1090,7 @@ def _compress_video_bytes(video_bytes: bytes, crf: int) -> bytes:
         with open(in_path, "wb") as infile:
             infile.write(video_bytes)
 
-        import imageio_ffmpeg
-
-        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        ffmpeg_path = get_ffmpeg_path()
         cmd = [
             ffmpeg_path,
             "-y",

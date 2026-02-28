@@ -81,3 +81,9 @@
 - Fixed `/debug/final_video` response contract to always return an envelope `{ final_url, diagnostics }` instead of returning raw diagnostics directly, aligning implementation with documented frontend typing tables.
 - Updated final-video diagnostics tests to assert the wrapped response shape and added coverage for the download-error branch so failures still return the same envelope.
 - Synced README response-shape table to include `/debug/final_video` for contract visibility in primary docs.
+
+## 2026-02-28
+- Fixed Render `/jobs_prompt_tts` runtime failure caused by missing `pkg_resources` by adding `setuptools>=68` while keeping `imageio-ffmpeg==0.4.9`.
+- Added cached `get_ffmpeg_path()` helper that prefers `imageio_ffmpeg.get_ffmpeg_exe()`, falls back to `ffmpeg` on PATH, and validates availability via `-version` with clear HTTP 500 errors.
+- Updated `mux_video_audio()` and `_compress_video_bytes()` to use shared ffmpeg resolution, improved mux error handling for `CalledProcessError`/`FileNotFoundError`, and log stderr for debugging without leaking internals to API clients.
+- Added unit coverage for `get_ffmpeg_path()` with runtime-aware skip when ffmpeg is unavailable.

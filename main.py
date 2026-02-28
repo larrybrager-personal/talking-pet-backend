@@ -13,6 +13,7 @@ import uuid
 import tempfile
 import shutil
 import subprocess
+import importlib
 from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Any, Tuple
@@ -850,7 +851,7 @@ def inspect_video_bytes(video_bytes: bytes) -> dict[str, Any]:
     ) as exc:
         return {"is_valid_mp4": False, "probe_error": type(exc).__name__}
     finally:
-        shutil.rmtree(tmpdir)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 async def collect_video_delivery_debug(url: str) -> dict[str, Any]:
@@ -1010,16 +1011,31 @@ def _build_mux_command(
 def get_ffmpeg_path() -> str:
     """Resolve an ffmpeg binary path and validate it is runnable."""
 
-    ffmpeg_path = "ffmpeg"
+    ffmpeg_path = None
     try:
-        import imageio_ffmpeg
-
-        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception as exc:  # pragma: no cover - fallback path in production
+        imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
+    except ImportError as exc:  # pragma: no cover - fallback path in production
         logger.warning(
-            "imageio_ffmpeg unavailable, falling back to PATH ffmpeg: %s",
-            type(exc).__name__,
+            "imageio_ffmpeg import failed; falling back to PATH ffmpeg: %s",
+            str(exc),
+            exc_info=True,
         )
+    else:
+        try:
+            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        except (AttributeError, OSError, RuntimeError, ValueError) as exc:
+            logger.warning(
+                "imageio_ffmpeg.get_ffmpeg_exe failed; falling back to PATH ffmpeg: %s",
+                str(exc),
+                exc_info=True,
+            )
+
+    if not ffmpeg_path:
+        ffmpeg_path = shutil.which("ffmpeg")
+
+    if not ffmpeg_path:
+        logger.error("ffmpeg binary not found via imageio_ffmpeg or PATH")
+        raise HTTPException(500, "ffmpeg not available in runtime")
 
     try:
         subprocess.run(
@@ -1065,9 +1081,16 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
 
         ffmpeg_path = get_ffmpeg_path()
         cmd = _build_mux_command(ffmpeg_path, vpath, apath, fpath)
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
-        final_bytes = open(fpath, "rb").read()
+        with open(fpath, "rb") as outfile:
+            final_bytes = outfile.read()
         return final_bytes
     except FileNotFoundError as exc:
         logger.error("ffmpeg executable not found during mux")
@@ -1076,7 +1099,7 @@ async def mux_video_audio(video_url: str, audio_url: str) -> bytes:
         logger.error("ffmpeg mux failed: %s", (exc.stderr or "").strip())
         raise HTTPException(500, "ffmpeg mux failed") from exc
     finally:
-        shutil.rmtree(tmpdir)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def _compress_video_bytes(video_bytes: bytes, crf: int) -> bytes:
@@ -1108,12 +1131,18 @@ def _compress_video_bytes(video_bytes: bytes, crf: int) -> bytes:
             "+faststart",
             out_path,
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
         with open(out_path, "rb") as outfile:
             return outfile.read()
     finally:
-        shutil.rmtree(tmpdir)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def prepare_video_for_upload_with_debug(

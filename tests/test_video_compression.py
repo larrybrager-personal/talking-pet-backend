@@ -1,4 +1,7 @@
+import asyncio
+import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -41,8 +44,47 @@ class PrepareVideoForUploadTest(unittest.TestCase):
 
 
 class GetFfmpegPathTest(unittest.TestCase):
-    def test_returns_path_when_ffmpeg_available(self):
+    def setUp(self):
         main.get_ffmpeg_path.cache_clear()
+
+    def test_prefers_imageio_ffmpeg_when_available(self):
+        fake_module = SimpleNamespace(get_ffmpeg_exe=lambda: "/fake/ffmpeg")
+
+        with (
+            patch.object(main.importlib, "import_module", return_value=fake_module),
+            patch.object(main.subprocess, "run") as mock_run,
+        ):
+            ffmpeg_path = main.get_ffmpeg_path()
+
+        self.assertEqual(ffmpeg_path, "/fake/ffmpeg")
+        mock_run.assert_called_once_with(
+            ["/fake/ffmpeg", "-version"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def test_falls_back_to_path_when_imageio_import_fails(self):
+        with (
+            patch.object(
+                main.importlib, "import_module", side_effect=ImportError("missing")
+            ),
+            patch.object(main.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(main.subprocess, "run") as mock_run,
+        ):
+            ffmpeg_path = main.get_ffmpeg_path()
+
+        self.assertEqual(ffmpeg_path, "/usr/bin/ffmpeg")
+        mock_run.assert_called_once_with(
+            ["/usr/bin/ffmpeg", "-version"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def test_returns_path_when_ffmpeg_available(self):
         try:
             ffmpeg_path = main.get_ffmpeg_path()
         except HTTPException as exc:
@@ -51,6 +93,67 @@ class GetFfmpegPathTest(unittest.TestCase):
             raise
 
         self.assertTrue(isinstance(ffmpeg_path, str) and len(ffmpeg_path) > 0)
+
+
+class MuxVideoAudioTest(unittest.TestCase):
+    class _FakeResponse:
+        def __init__(self, content: bytes):
+            self.content = content
+
+        def raise_for_status(self):
+            return None
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str):
+            if url.endswith(".mp3"):
+                return MuxVideoAudioTest._FakeResponse(b"audio-bytes")
+            return MuxVideoAudioTest._FakeResponse(b"video-bytes")
+
+    def test_mux_maps_called_process_error_to_http_500(self):
+        async def run_test():
+            with (
+                patch("main.httpx.AsyncClient", return_value=self._FakeAsyncClient()),
+                patch("main.get_ffmpeg_path", return_value="/usr/bin/ffmpeg"),
+                patch(
+                    "main.subprocess.run",
+                    side_effect=subprocess.CalledProcessError(
+                        1,
+                        ["/usr/bin/ffmpeg"],
+                        stderr="mux failed",
+                    ),
+                ),
+            ):
+                with self.assertRaises(HTTPException) as exc:
+                    await main.mux_video_audio(
+                        "https://example.com/video.mp4", "https://example.com/audio.mp3"
+                    )
+
+            self.assertEqual(exc.exception.status_code, 500)
+            self.assertEqual(exc.exception.detail, "ffmpeg mux failed")
+
+        asyncio.run(run_test())
+
+    def test_mux_maps_missing_ffmpeg_to_http_500(self):
+        async def run_test():
+            with (
+                patch("main.httpx.AsyncClient", return_value=self._FakeAsyncClient()),
+                patch("main.get_ffmpeg_path", side_effect=FileNotFoundError("missing")),
+            ):
+                with self.assertRaises(HTTPException) as exc:
+                    await main.mux_video_audio(
+                        "https://example.com/video.mp4", "https://example.com/audio.mp3"
+                    )
+
+            self.assertEqual(exc.exception.status_code, 500)
+            self.assertEqual(exc.exception.detail, "ffmpeg not available in runtime")
+
+        asyncio.run(run_test())
 
 
 if __name__ == "__main__":

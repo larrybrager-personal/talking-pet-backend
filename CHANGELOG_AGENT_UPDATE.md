@@ -32,3 +32,16 @@
 - Documented canonical capability semantics in `GET /models`: `supportsAudioIn` (accepts external audio conditioning) and `generatesAudio` (may produce model-native audio).
 - Added compact endpoint response-shape tables for frontend typing stability.
 - Added endpoint contract tests that lock response key sets for `/jobs_prompt_only` and `/jobs_prompt_tts`, plus capability-flag presence/type checks on `/models`.
+
+## 2026-02-28 - ffmpeg runtime robustness on Render
+- Added `setuptools>=68` to prevent `pkg_resources` import errors when loading `imageio_ffmpeg` in production.
+- Introduced `get_ffmpeg_path()` with imageio-first, PATH fallback, and executable validation via `ffmpeg -version`.
+- Hardened muxing/compression paths to share ffmpeg resolution and return clear 500s (`ffmpeg not available in runtime`, `ffmpeg mux failed`) while logging actionable stderr diagnostics.
+- Added a focused unit test for ffmpeg-path resolution with skip behavior when ffmpeg is not present in CI/runtime.
+
+## 2026-02-28 - ffmpeg robustness follow-up for PR #41
+- Tightened `get_ffmpeg_path()` import fallback handling from broad `Exception` to explicit `ImportError` plus constrained `get_ffmpeg_exe()` failure cases, with richer logs.
+- Added PATH fallback via `shutil.which("ffmpeg")` before version validation.
+- Updated mux/compress ffmpeg subprocess calls to avoid `capture_output=True` and reduced memory pressure with DEVNULL/PIPE stream handling.
+- Ensured temp-dir cleanup cannot mask primary failures by switching to `ignore_errors=True` cleanup in ffmpeg temp workflows.
+- Added deterministic unit tests for ffmpeg resolution behavior and mux HTTPException mappings.

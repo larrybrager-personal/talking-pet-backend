@@ -60,3 +60,9 @@
 - Updated idempotency Supabase PATCH/write paths to the payload-based schema only: `response_payload` and `error_payload` (plus `response_status`) in `update_job_request`.
 - Updated idempotent duplicate polling to read `response_payload` on success and surface `error_payload.message` on failure in `await_existing_job_request`.
 - Updated idempotency test fixtures to match payload-based columns and verified behavior with unit tests.
+
+## 2026-02-28
+- Fixed an unhandled model-resolution failure path by translating `ValueError` from routing resolution into `400` responses in `/resolve_model` and shared job model resolution, preventing opaque `500` errors for invalid resolution/model-plan combinations.
+- Added structured unexpected-error logging helper for `/jobs_prompt_only` and `/jobs_prompt_tts` to capture endpoint, request_id, user_id, model, and exception type without logging request payloads or secrets.
+- Removed duplicate compression diagnostics assignment in `/jobs_prompt_only` final-video diagnostics to keep debug payloads clean and deterministic.
+- Validated updates with formatting, compile checks, and focused routing/metadata tests.

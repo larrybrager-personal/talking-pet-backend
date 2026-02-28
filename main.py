@@ -95,6 +95,26 @@ app.add_middleware(
 logger = logging.getLogger("talking_pet_backend")
 
 
+def _log_unexpected_job_error(
+    *,
+    endpoint: str,
+    exc: Exception,
+    model: str | None = None,
+    request_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    """Emit structured, non-PII diagnostics for unexpected request failures."""
+
+    logger.exception(
+        "unexpected_error endpoint=%s request_id=%s user_id=%s model=%s error_type=%s",
+        endpoint,
+        request_id,
+        user_id,
+        model,
+        type(exc).__name__,
+    )
+
+
 class RequestModel(BaseModel):
     """Pydantic v1/v2-compatible request base model config."""
 
@@ -1292,7 +1312,13 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             "resolved": {**resolved_settings},
         }
 
-    resolved = await resolve_model_for_intent(intent)
+    try:
+        resolved = await resolve_model_for_intent(intent)
+    except ValueError as exc:
+        raise HTTPException(
+            400,
+            f"Unable to resolve model settings: {exc}",
+        ) from exc
     effective_plan_tier = resolved.get(
         "plan_tier", resolved["resolved_meta"].get("plan_tier")
     )
@@ -1344,16 +1370,24 @@ async def _resolve_job_model(
             plan_tier=plan_tier,
         )
     else:
-        result = await resolve_model_for_intent(
-            {
-                "seconds": seconds,
-                "resolution": resolution,
-                "quality": normalized_quality,
-                "fps": fps,
-                "has_audio": has_audio,
-                "user_context": to_model_dict(user_context) if user_context else None,
-            }
-        )
+        try:
+            result = await resolve_model_for_intent(
+                {
+                    "seconds": seconds,
+                    "resolution": resolution,
+                    "quality": normalized_quality,
+                    "fps": fps,
+                    "has_audio": has_audio,
+                    "user_context": (
+                        to_model_dict(user_context) if user_context else None
+                    ),
+                }
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                400,
+                f"Unable to resolve model settings: {exc}",
+            ) from exc
         chosen = result["resolved_model_slug"]
         if not is_model_allowed_for_plan(chosen, plan_tier):
             raise HTTPException(
@@ -1448,7 +1482,6 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                 diagnostics = await collect_video_delivery_debug(final_url)
                 if compression_debug is not None:
                     diagnostics["compression"] = compression_debug
-                diagnostics["compression"] = compression_debug
                 if diagnostics.get("head_status", 0) >= 400:
                     _raise_final_video_error(
                         "Uploaded final video URL is not publicly reachable.",
@@ -1486,6 +1519,13 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             )
         raise
     except Exception as exc:
+        _log_unexpected_job_error(
+            endpoint="/jobs_prompt_only",
+            exc=exc,
+            model=model,
+            request_id=normalized_request_id,
+            user_id=user_id,
+        )
         if normalized_request_id:
             await update_job_request(
                 normalized_request_id,
@@ -1636,7 +1676,14 @@ async def create_job_with_prompt_and_tts(
                 error=str(exc.detail),
             )
         raise
-    except Exception:
+    except Exception as exc:
+        _log_unexpected_job_error(
+            endpoint="/jobs_prompt_tts",
+            exc=exc,
+            model=model,
+            request_id=normalized_request_id,
+            user_id=user_id,
+        )
         if final_key:
             await supabase_delete(final_key)
         if audio_key:

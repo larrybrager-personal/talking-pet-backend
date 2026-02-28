@@ -55,3 +55,8 @@
 - Added unit tests for deduped-success short-circuit, owner success update, and processing-to-succeeded polling behavior.
 - Updated README with idempotency request/response behavior and env controls (`IDEMPOTENCY_POLL_INTERVAL_SEC`, `IDEMPOTENCY_MAX_WAIT_SEC`).
 
+
+## 2026-02-27
+- Updated idempotency Supabase PATCH/write paths to the payload-based schema only: `response_payload` and `error_payload` (plus `response_status`) in `update_job_request`.
+- Updated idempotent duplicate polling to read `response_payload` on success and surface `error_payload.message` on failure in `await_existing_job_request`.
+- Updated idempotency test fixtures to match payload-based columns and verified behavior with unit tests.

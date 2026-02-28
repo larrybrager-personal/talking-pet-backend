@@ -16,3 +16,7 @@
 - Wire this proxy implementation into the actual frontend deployment repository if `/api/backend/job` is owned outside this backend repo.
 - Expand proxy tests to cover success-path `request_id` propagation and fallback generation when incoming headers are missing.
 - Add a shared structured logger adapter (instead of `console`) so logs can be shipped consistently to the production log pipeline with severity and trace context.
+
+## 2026-02-28 Debug Final Video Contract Follow-ups
+- Add explicit Pydantic `response_model` for `/debug/final_video` so OpenAPI and generated clients enforce `{ final_url, diagnostics }` at schema level instead of relying only on docs/tests.
+- Consider splitting `diagnostics` into typed sub-objects (`delivery`, `probe`, `compression`) to reduce frontend `object` casts and improve generated SDK ergonomics.

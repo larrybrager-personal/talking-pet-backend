@@ -1716,7 +1716,7 @@ async def debug_final_video(
         sample_bytes = await fetch_binary(req.url, timeout=60)
     except httpx.HTTPError as exc:
         diagnostics["download_error"] = type(exc).__name__
-        return diagnostics
+        return {"final_url": req.url, "diagnostics": diagnostics}
 
     diagnostics["probe"] = inspect_video_bytes(sample_bytes)
     diagnostics["downloaded_bytes"] = len(sample_bytes)
@@ -1727,4 +1727,4 @@ async def debug_final_video(
             target_bytes=req.target_bytes,
         )
 
-    return diagnostics
+    return {"final_url": req.url, "diagnostics": diagnostics}

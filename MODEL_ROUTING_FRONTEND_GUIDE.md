@@ -12,7 +12,7 @@ Use this guide when wiring a UI or agent client to the backend model-routing flo
 4. Submit final generation request via:
    - `POST /jobs_prompt_only`, or
    - `POST /jobs_prompt_tts`
-5. Render returned URLs (`video_url`, `audio_url`, `final_url`).
+5. Render returned URLs (`video_url`, `audio_url`, `final_url`) with `final_url` as the canonical playback URL.
 
 ## 2) Tier and route defaults
 
@@ -23,6 +23,15 @@ Routing defaults:
 - `legacyFallback` → `wan-video/wan-2.2-s2v`
 
 `default_model` is the fast route default.
+
+
+## 3.1) Capability semantics (canonical)
+
+In `GET /models`, interpret capability flags as:
+- `supportsAudioIn`: model accepts external audio conditioning input from the request.
+- `generatesAudio`: model may produce its own audio track without external audio input.
+
+These two booleans are independent and should not be conflated in frontend logic.
 
 ## 3) Legacy slug normalization
 
@@ -76,6 +85,23 @@ Treat `resolved` values from `POST /resolve_model` as source-of-truth preview va
   "user_context": {"id": "uuid", "plan_tier": "studio"}
 }
 ```
+
+## 6.1) Response-shape table (for frontend typing)
+
+| Endpoint | Response shape |
+|---|---|
+| `GET /health` | `{ ok: boolean }` |
+| `GET /models` | `{ supported_models: Record<string, ModelMeta>, default_model: string, routing_defaults: RoutingDefaults }` |
+| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string } }` |
+| `POST /jobs_prompt_only` | `{ video_url: string, final_url: string }` |
+| `POST /jobs_prompt_tts` | `{ audio_url: string, video_url: string, final_url: string }` |
+| `POST /debug/head` | `{ status: number, content_type: string \| null, bytes: number \| null }` |
+| `POST /debug/final_video` | `{ final_url: string, diagnostics: object }` |
+
+`final_url` semantics:
+- `/jobs_prompt_only`: always a backend-uploaded Supabase artifact.
+- `/jobs_prompt_tts` + `supportsAudioIn=true`: backend re-uploads generated MP4 as `final_url` (no mux step).
+- `/jobs_prompt_tts` + `supportsAudioIn=false`: backend muxes video + TTS audio and uploads a new MP4 as `final_url`.
 
 ## 7) Important UX notes
 - Keep prompts concise and concrete.

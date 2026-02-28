@@ -1,5 +1,7 @@
 # Known Gaps / Follow-ups
 
+- Add typed frontend SDK (TypeScript interfaces + runtime zod validators) generated from OpenAPI/contract snapshots to enforce the documented response-shape tables at compile time and runtime.
+- Add endpoint tests for `/jobs_prompt_tts` `supportsAudioIn=false` branch to assert mux path response-shape remains stable during audio/video composition changes.
 - Add frontend reference UI component for rendering `/debug/final_video` diagnostics with copy-to-clipboard support for support tickets.
 - Extend final video diagnostics to include browser-playability checks (e.g., MediaSource/HTML5 video test harness) instead of transport/container checks only.
 - Add redaction filters for structured logs if future debug payloads include user-provided prompt/script fields.

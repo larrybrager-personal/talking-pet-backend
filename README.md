@@ -19,16 +19,18 @@ This repo is designed so both humans and AI agents can quickly understand and dr
 2. Normalize duration/resolution/fps to values that model supports.
 3. Submit generation to Replicate.
 4. Upload resulting MP4 to Supabase.
-5. Return `video_url`.
+5. Return both:
+   - `video_url`: provider-generated URL returned by Replicate.
+   - `final_url`: Supabase URL for the backend-managed MP4 artifact (this is what clients should persist/play).
 
 ### Flow B: Prompt + TTS (`POST /jobs_prompt_tts`)
 1. Validate request body and enforce `TTS_MAX_CHARS`.
 2. Generate MP3 from ElevenLabs.
 3. Upload MP3 to Supabase (`audio_url`).
 4. Resolve model/settings and generate video on Replicate.
-5. Upload generated MP4 (`video_url`).
-6. If model output already contains synced audio (Wan S2V / Kling family), return `final_url = video_url`.
-7. Otherwise mux video + audio with ffmpeg, upload muxed MP4, and return `final_url`.
+5. Capture model output URL as `video_url` (provider-generated).
+6. If selected model `supportsAudioIn`, pass uploaded TTS audio into generation and re-upload returned MP4 to Supabase as `final_url` (no mux step).
+7. Otherwise mux model video + TTS audio with ffmpeg, upload muxed MP4 to Supabase, and return muxed `final_url`.
 
 ### Optional helper: model intent routing (`POST /resolve_model`)
 Use this endpoint before job creation to let backend choose the best model for quality/plan intent and normalize settings.
@@ -118,6 +120,10 @@ Returns:
 - `default_model`
 - `routing_defaults`
 
+Capability semantics used by `supported_models[*].capabilities`:
+- `supportsAudioIn`: model accepts externally supplied audio conditioning input.
+- `generatesAudio`: model may generate an internal audio track on its own.
+
 ### `POST /resolve_model`
 Request (example):
 ```json
@@ -163,7 +169,10 @@ Request (example):
 
 Response:
 ```json
-{"video_url": "https://.../video.mp4"}
+{
+  "video_url": "https://provider.example/video.mp4",
+  "final_url": "https://supabase.example/storage/v1/object/public/.../final.mp4"
+}
 ```
 
 ### `POST /jobs_prompt_tts`
@@ -189,10 +198,26 @@ Response:
 ```json
 {
   "audio_url": "https://.../audio.mp3",
-  "video_url": "https://.../video.mp4",
+  "video_url": "https://provider.example/video.mp4",
   "final_url": "https://.../final.mp4"
 }
 ```
+
+`final_url` behavior:
+- `/jobs_prompt_only`: always a backend-uploaded Supabase artifact.
+- `/jobs_prompt_tts` + `supportsAudioIn=true`: backend re-uploads the generated MP4 as `final_url` (no mux).
+- `/jobs_prompt_tts` + `supportsAudioIn=false`: backend creates a new muxed MP4 artifact and returns that as `final_url`.
+
+### Response-shape table (frontend typing)
+
+| Endpoint | Response shape |
+|---|---|
+| `GET /health` | `{ ok: boolean }` |
+| `GET /models` | `{ supported_models: Record<string, ModelMeta>, default_model: string, routing_defaults: RoutingDefaults }` |
+| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string } }` |
+| `POST /jobs_prompt_only` | `{ video_url: string, final_url: string }` |
+| `POST /jobs_prompt_tts` | `{ audio_url: string, video_url: string, final_url: string }` |
+| `POST /debug/head` | `{ status: number, content_type: string \| null, bytes: number \| null }` |
 
 ### `POST /debug/head`
 Request:

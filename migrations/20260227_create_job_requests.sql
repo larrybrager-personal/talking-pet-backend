@@ -6,8 +6,9 @@ create table if not exists public.job_requests (
   user_id uuid null,
   endpoint text not null,
   status text not null check (status in ('processing', 'succeeded', 'failed')),
-  response jsonb null,
-  error text null,
+  response_payload jsonb null,
+  error_payload jsonb null,
+  response_status integer null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

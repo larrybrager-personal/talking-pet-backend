@@ -20,3 +20,9 @@
 - Added pydantic v1/v2-compatible request config (`populate by name`, `extra=ignore`) for resilient API parsing.
 - Added top-level `plan_tier` to `/resolve_model` responses for both override and routed selections.
 - Added tests validating camelCase request payload support and guaranteed `plan_tier` response presence.
+
+## 2026-02-28 - Proxy observability hardening
+- Added Next.js proxy route scaffold for `/api/backend/job` that guarantees JSON responses and includes `x-request-id` in both response headers and response payloads.
+- Added shared proxy core logic for request-id generation/forwarding, upstream JSON error passthrough, and non-JSON upstream error wrapping with bounded/sanitized previews.
+- Added safe proxy logging for upstream status + request_id + sanitized preview.
+- Added regression tests for upstream 500 JSON forwarding and upstream 500 text wrapping behavior.

@@ -66,3 +66,8 @@
 - Added structured unexpected-error logging helper for `/jobs_prompt_only` and `/jobs_prompt_tts` to capture endpoint, request_id, user_id, model, and exception type without logging request payloads or secrets.
 - Removed duplicate compression diagnostics assignment in `/jobs_prompt_only` final-video diagnostics to keep debug payloads clean and deterministic.
 - Validated updates with formatting, compile checks, and focused routing/metadata tests.
+
+## 2026-02-28
+- Added a Next.js proxy route handler scaffold at `app/api/backend/job/route.js` with correlation-aware forwarding via `x-request-id` and guaranteed JSON responses on both success and failure.
+- Added proxy core helper (`app/api/backend/job/proxy-core.cjs`) to centralize request-id generation, upstream JSON passthrough behavior, bounded/sanitized non-JSON error previews, and safe observability logs (`request_id`, upstream status, preview).
+- Added regression tests (`tests_js/proxy_route_error_forwarding.test.cjs`) covering upstream 500 JSON passthrough and upstream 500 text wrapping into stable JSON with `request_id`.

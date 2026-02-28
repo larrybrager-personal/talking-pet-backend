@@ -11,3 +11,8 @@
 - Add request-scoped correlation IDs (from header or generated UUID) to all log lines, including downstream Supabase/Replicate calls, to speed up production tracing across async boundaries.
 - Add tests that explicitly assert `ValueError` from `resolve_model_for_intent` maps to HTTP 400 in `/resolve_model` and both job endpoints.
 - Consider moving logger configuration to structured JSON output for production environments to improve searchability in log aggregation tools.
+
+## 2026-02-28 Proxy Observability Follow-ups
+- Wire this proxy implementation into the actual frontend deployment repository if `/api/backend/job` is owned outside this backend repo.
+- Expand proxy tests to cover success-path `request_id` propagation and fallback generation when incoming headers are missing.
+- Add a shared structured logger adapter (instead of `console`) so logs can be shipped consistently to the production log pipeline with severity and trace context.

@@ -72,7 +72,9 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
             seconds=6,
             resolution="768p",
             model=None,
-            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000", plan_tier="creator"),
+            user_context=main.UserContext(
+                id="00000000-0000-0000-0000-000000000000", plan_tier="creator"
+            ),
         )
 
         with (
@@ -208,7 +210,9 @@ class ModelParamsAllowlistTest(unittest.IsolatedAsyncioTestCase):
             resolution="768p",
             model_override="wan-video/wan2.6-i2v-flash",
             model_params={"fps": 30, "unknown": "ignore-me"},
-            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000", plan_tier="creator"),
+            user_context=main.UserContext(
+                id="00000000-0000-0000-0000-000000000000", plan_tier="creator"
+            ),
         )
 
         with (
@@ -289,9 +293,31 @@ class FinalVideoDebugTest(unittest.IsolatedAsyncioTestCase):
 
             result = await main.debug_final_video(req)
 
-        self.assertEqual(result["head_status"], 200)
-        self.assertEqual(result["downloaded_bytes"], 3)
-        self.assertEqual(result["probe"], {"is_valid_mp4": True})
+        self.assertEqual(result["final_url"], "https://public.final/video.mp4")
+        self.assertEqual(result["diagnostics"]["head_status"], 200)
+        self.assertEqual(result["diagnostics"]["downloaded_bytes"], 3)
+        self.assertEqual(result["diagnostics"]["probe"], {"is_valid_mp4": True})
+
+    async def test_debug_final_video_wraps_download_errors_in_diagnostics(self):
+        req = main.FinalVideoDebugRequest(url="https://public.final/video.mp4")
+
+        with (
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_collect,
+            patch(
+                "main.fetch_binary",
+                new_callable=AsyncMock,
+                side_effect=main.httpx.HTTPError("boom"),
+            ),
+        ):
+            mock_collect.return_value = {"head_status": 200, "content_length": 111}
+
+            result = await main.debug_final_video(req)
+
+        self.assertEqual(result["final_url"], "https://public.final/video.mp4")
+        self.assertEqual(result["diagnostics"]["head_status"], 200)
+        self.assertEqual(result["diagnostics"]["download_error"], "HTTPError")
 
     async def test_debug_final_video_includes_compression_analysis_when_requested(self):
         req = main.FinalVideoDebugRequest(
@@ -314,7 +340,9 @@ class FinalVideoDebugTest(unittest.IsolatedAsyncioTestCase):
 
             result = await main.debug_final_video(req)
 
-        self.assertEqual(result["compression"], {"meets_target": True, "attempts": []})
+        self.assertEqual(
+            result["diagnostics"]["compression"], {"meets_target": True, "attempts": []}
+        )
 
 
 if __name__ == "__main__":

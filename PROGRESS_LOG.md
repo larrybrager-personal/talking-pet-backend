@@ -71,3 +71,13 @@
 - Added a Next.js proxy route handler scaffold at `app/api/backend/job/route.js` with correlation-aware forwarding via `x-request-id` and guaranteed JSON responses on both success and failure.
 - Added proxy core helper (`app/api/backend/job/proxy-core.cjs`) to centralize request-id generation, upstream JSON passthrough behavior, bounded/sanitized non-JSON error previews, and safe observability logs (`request_id`, upstream status, preview).
 - Added regression tests (`tests_js/proxy_route_error_forwarding.test.cjs`) covering upstream 500 JSON passthrough and upstream 500 text wrapping into stable JSON with `request_id`.
+
+- Standardized docs for endpoint contract parity with implementation: `/jobs_prompt_only` now documented with `{video_url, final_url}` and clarified `final_url` lifecycle in both jobs flows.
+- Added canonical model capability definitions (`supportsAudioIn`, `generatesAudio`) to docs for reliable frontend interpretation.
+- Added response-shape tables to README + frontend guide to support stable client-side typing.
+- Added endpoint contract tests to lock response keys for `/jobs_prompt_only`, `/jobs_prompt_tts`, and capability-flag presence/types in `/models`.
+
+## 2026-02-28
+- Fixed `/debug/final_video` response contract to always return an envelope `{ final_url, diagnostics }` instead of returning raw diagnostics directly, aligning implementation with documented frontend typing tables.
+- Updated final-video diagnostics tests to assert the wrapped response shape and added coverage for the download-error branch so failures still return the same envelope.
+- Synced README response-shape table to include `/debug/final_video` for contract visibility in primary docs.

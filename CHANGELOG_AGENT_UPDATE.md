@@ -26,3 +26,9 @@
 - Added shared proxy core logic for request-id generation/forwarding, upstream JSON error passthrough, and non-JSON upstream error wrapping with bounded/sanitized previews.
 - Added safe proxy logging for upstream status + request_id + sanitized preview.
 - Added regression tests for upstream 500 JSON forwarding and upstream 500 text wrapping behavior.
+
+## 2026-02-28 - Backend contract docs + response-shape guardrails
+- Updated `README.md` and `MODEL_ROUTING_FRONTEND_GUIDE.md` so `/jobs_prompt_only` documents both `video_url` and `final_url` as returned by `main.py`.
+- Documented canonical capability semantics in `GET /models`: `supportsAudioIn` (accepts external audio conditioning) and `generatesAudio` (may produce model-native audio).
+- Added compact endpoint response-shape tables for frontend typing stability.
+- Added endpoint contract tests that lock response key sets for `/jobs_prompt_only` and `/jobs_prompt_tts`, plus capability-flag presence/type checks on `/models`.

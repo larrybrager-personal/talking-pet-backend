@@ -130,7 +130,7 @@ class IdempotencyBehaviorTest(unittest.IsolatedAsyncioTestCase):
                 {"status": "processing"},
                 {
                     "status": "succeeded",
-                    "response": {
+                    "response_payload": {
                         "audio_url": "https://public/audio.mp3",
                         "video_url": "https://public/video.mp4",
                         "final_url": "https://public/final.mp4",

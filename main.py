@@ -601,7 +601,11 @@ async def update_job_request(
     response_payload: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> None:
-    """Persist idempotency completion state for an existing request."""
+    """Persist idempotency completion state for an existing request.
+
+    Expected Supabase schema: ``job_requests.response_payload`` and
+    ``job_requests.error_payload`` (jsonb columns).
+    """
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
         raise HTTPException(500, "Supabase env not set")
@@ -615,9 +619,11 @@ async def update_job_request(
     }
     payload: dict[str, Any] = {"status": status}
     if response_payload is not None:
-        payload["response"] = response_payload
+        payload["response_payload"] = response_payload
+        payload["response_status"] = 200
     if error is not None:
-        payload["error"] = error
+        payload["error_payload"] = {"message": error}
+        payload["response_status"] = 500
 
     async with httpx.AsyncClient(timeout=30) as client:
         patch_response = await client.patch(
@@ -646,12 +652,17 @@ async def await_existing_job_request(request_id: str) -> dict[str, Any]:
             )
 
         status = row.get("status")
-        if status == "succeeded" and row.get("response"):
-            return row["response"]
+        if status == "succeeded" and row.get("response_payload"):
+            return row["response_payload"]
         if status == "failed":
+            error_payload = row.get("error_payload")
+            if isinstance(error_payload, dict):
+                error_message = error_payload.get("message") or str(error_payload)
+            else:
+                error_message = str(error_payload) if error_payload else None
             raise HTTPException(
                 409,
-                row.get("error") or "Request previously failed for this request_id.",
+                error_message or "Request previously failed for this request_id.",
             )
         if status != "processing":
             raise HTTPException(409, f"Unexpected idempotency status '{status}'.")

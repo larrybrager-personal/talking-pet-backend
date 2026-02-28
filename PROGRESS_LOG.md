@@ -76,3 +76,8 @@
 - Added canonical model capability definitions (`supportsAudioIn`, `generatesAudio`) to docs for reliable frontend interpretation.
 - Added response-shape tables to README + frontend guide to support stable client-side typing.
 - Added endpoint contract tests to lock response keys for `/jobs_prompt_only`, `/jobs_prompt_tts`, and capability-flag presence/types in `/models`.
+
+## 2026-02-28
+- Fixed `/debug/final_video` response contract to always return an envelope `{ final_url, diagnostics }` instead of returning raw diagnostics directly, aligning implementation with documented frontend typing tables.
+- Updated final-video diagnostics tests to assert the wrapped response shape and added coverage for the download-error branch so failures still return the same envelope.
+- Synced README response-shape table to include `/debug/final_video` for contract visibility in primary docs.

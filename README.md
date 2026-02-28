@@ -218,6 +218,7 @@ Response:
 | `POST /jobs_prompt_only` | `{ video_url: string, final_url: string }` |
 | `POST /jobs_prompt_tts` | `{ audio_url: string, video_url: string, final_url: string }` |
 | `POST /debug/head` | `{ status: number, content_type: string \| null, bytes: number \| null }` |
+| `POST /debug/final_video` | `{ final_url: string, diagnostics: object }` |
 
 ### `POST /debug/head`
 Request:

@@ -547,5 +547,58 @@ class QualityNormalizationTestCase(unittest.TestCase):
         self.assertEqual(main.normalize_quality("not-a-tier"), "fast")
 
 
+class ResolveModelErrorMappingTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._auth_enabled = main.API_AUTH_ENABLED
+        main.API_AUTH_ENABLED = False
+        self.client = TestClient(main.app)
+
+    def tearDown(self) -> None:
+        main.API_AUTH_ENABLED = self._auth_enabled
+
+    def test_resolve_model_maps_routing_value_error_to_400(self):
+        with patch(
+            "main.resolve_model_for_intent",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
+            mock_resolve.side_effect = ValueError("bad intent")
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "720p",
+                    "quality": "fast",
+                    "has_audio": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unable to resolve model settings", response.json()["detail"])
+
+
+class ResolveJobModelErrorMappingTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_resolve_job_model_maps_routing_value_error_to_400(self):
+        with patch(
+            "main.resolve_model_for_intent",
+            new_callable=AsyncMock,
+        ) as mock_resolve:
+            mock_resolve.side_effect = ValueError("no supported resolution")
+            with self.assertRaises(main.HTTPException) as exc:
+                await main._resolve_job_model(
+                    seconds=6,
+                    resolution="720p",
+                    quality="fast",
+                    fps=None,
+                    has_audio=False,
+                    user_context=None,
+                    model=None,
+                    model_override=None,
+                    model_params=None,
+                )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertIn("Unable to resolve model settings", exc.exception.detail)
+
+
 if __name__ == "__main__":
     unittest.main()

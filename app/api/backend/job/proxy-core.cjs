@@ -34,6 +34,18 @@ function ensureRequestId(candidate) {
   return crypto.randomUUID();
 }
 
+function buildUpstreamHeaders(requestHeaders, requestId) {
+  const authHeader = requestHeaders?.get?.("authorization");
+  const headers = {
+    "content-type": "application/json",
+    "x-request-id": requestId,
+  };
+  if (authHeader && String(authHeader).trim()) {
+    headers.authorization = String(authHeader).trim();
+  }
+  return headers;
+}
+
 function buildUpstreamNonJsonError(statusCode, requestId, bodyText) {
   const mappedStatus = statusCode >= 500 ? 502 : 500;
   return {
@@ -65,10 +77,7 @@ async function proxyJobRequest({ request, fetchImpl, backendUrl, logger = consol
   try {
     upstream = await fetchImpl(backendUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-request-id": requestId,
-      },
+      headers: buildUpstreamHeaders(request.headers, requestId),
       body: JSON.stringify(payload),
     });
   } catch {

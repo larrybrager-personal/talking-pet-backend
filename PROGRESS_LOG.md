@@ -81,3 +81,10 @@
 - Fixed `/debug/final_video` response contract to always return an envelope `{ final_url, diagnostics }` instead of returning raw diagnostics directly, aligning implementation with documented frontend typing tables.
 - Updated final-video diagnostics tests to assert the wrapped response shape and added coverage for the download-error branch so failures still return the same envelope.
 - Synced README response-shape table to include `/debug/final_video` for contract visibility in primary docs.
+
+## 2026-02-28
+- Added request-correlation middleware in `main.py` to ingest/generate `x-request-id`, persist on `request.state`, and return the same header on every response.
+- Added standardized JSON exception handlers for `HTTPException`, `RequestValidationError`, and generic `Exception` with payload shape `{ error, detail, requestId }`.
+- Added bounded async retry helper with exponential backoff + jitter for transient upstream failures (`429/502/503/504` + transport errors), and wired it into ElevenLabs TTS POST and Replicate prediction create/status calls.
+- Updated `/resolve_model`, `/jobs_prompt_only`, and `/jobs_prompt_tts` success payloads to include `requestId` while preserving existing fields.
+- Updated endpoint tests for new response keys and added `tests/test_request_id.py` to verify response header propagation plus success/error body correlation IDs.

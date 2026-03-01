@@ -1067,6 +1067,11 @@ def run_ffmpeg_runtime_smoke_check() -> None:
         logger.warning(
             "ffmpeg runtime smoke check failed; install setuptools (for pkg_resources) and ensure ffmpeg is on PATH"
         )
+    except Exception as exc:  # pragma: no cover - defensive startup guard
+        logger.warning(
+            "ffmpeg runtime smoke check failed with unexpected error; ensure ffmpeg binary is executable and available (%s)",
+            str(exc),
+        )
     else:
         logger.info("ffmpeg runtime smoke check passed (path=%s)", ffmpeg_path)
 

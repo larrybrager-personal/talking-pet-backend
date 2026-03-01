@@ -145,6 +145,17 @@ class FfmpegSmokeCheckTest(unittest.TestCase):
 
         self.assertTrue(mock_info.called)
 
+    def test_logs_warning_when_ffmpeg_lookup_raises_unexpected_error(self):
+        with (
+            patch(
+                "main.get_ffmpeg_path", side_effect=PermissionError("not executable")
+            ),
+            patch.object(main.logger, "warning") as mock_warning,
+        ):
+            main.run_ffmpeg_runtime_smoke_check()
+
+        self.assertTrue(mock_warning.called)
+
     def test_returns_path_when_ffmpeg_available(self):
         try:
             ffmpeg_path = main.get_ffmpeg_path()

@@ -111,6 +111,14 @@ def _request_id_from_request(request: Request) -> str:
     return request_id
 
 
+def _with_request_id(payload: dict[str, Any], request_id: str) -> dict[str, Any]:
+    """Return a shallow payload copy with requestId aligned to current request."""
+
+    payload_with_request_id = payload.copy()
+    payload_with_request_id["requestId"] = request_id
+    return payload_with_request_id
+
+
 def _error_response(
     *,
     status_code: int,
@@ -1631,7 +1639,7 @@ async def create_job_with_prompt(
                 "idempotency_request endpoint=/jobs_prompt_only request_id=%s owner=false deduped=true",
                 normalized_request_id,
             )
-            return existing_response
+            return _with_request_id(existing_response, request_id)
 
     try:
         video_url = await generate_video_from_prompt(
@@ -1690,7 +1698,6 @@ async def create_job_with_prompt(
         response_payload = {
             "video_url": video_url,
             "final_url": final_url,
-            "requestId": request_id,
         }
         if normalized_request_id:
             await update_job_request(
@@ -1699,7 +1706,7 @@ async def create_job_with_prompt(
                 response_payload=response_payload,
                 error=None,
             )
-        return response_payload
+        return _with_request_id(response_payload, request_id)
     except HTTPException as exc:
         if normalized_request_id:
             await update_job_request(
@@ -1762,7 +1769,7 @@ async def create_job_with_prompt_and_tts(
                 "idempotency_request endpoint=/jobs_prompt_tts request_id=%s owner=false deduped=true",
                 normalized_request_id,
             )
-            return existing_response
+            return _with_request_id(existing_response, request_id)
 
     final_key: str | None = None
     audio_key: str | None = None
@@ -1849,7 +1856,6 @@ async def create_job_with_prompt_and_tts(
             "audio_url": audio_public_url,
             "video_url": video_url,
             "final_url": final_url,
-            "requestId": request_id,
         }
         if normalized_request_id:
             await update_job_request(
@@ -1859,7 +1865,7 @@ async def create_job_with_prompt_and_tts(
                 error=None,
             )
 
-        return response_payload
+        return _with_request_id(response_payload, request_id)
     except HTTPException as exc:
         if final_key:
             await supabase_delete(final_key)

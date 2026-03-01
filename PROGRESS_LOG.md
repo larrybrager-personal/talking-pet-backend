@@ -88,3 +88,6 @@
 - Added bounded async retry helper with exponential backoff + jitter for transient upstream failures (`429/502/503/504` + transport errors), and wired it into ElevenLabs TTS POST and Replicate prediction create/status calls.
 - Updated `/resolve_model`, `/jobs_prompt_only`, and `/jobs_prompt_tts` success payloads to include `requestId` while preserving existing fields.
 - Updated endpoint tests for new response keys and added `tests/test_request_id.py` to verify response header propagation plus success/error body correlation IDs.
+- Fixed idempotency replay correlation behavior: deduplicated `/jobs_prompt_only` and `/jobs_prompt_tts` responses now always inject the current request's `requestId` instead of replaying a stale persisted value.
+- Stopped persisting `requestId` inside idempotency `response_payload`; now only stable business fields are stored and `requestId` is attached per-response at return time.
+- Added regression test to validate deduplicated replay body/header request-id alignment.

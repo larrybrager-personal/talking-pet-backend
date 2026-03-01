@@ -37,6 +37,47 @@ class RequestIdBehaviorTestCase(unittest.TestCase):
         self.assertIn("detail", payload)
         self.assertEqual(response.headers.get("x-request-id"), "corr-validation")
 
+    def test_idempotent_replay_uses_current_request_id_in_body(self):
+        with (
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch(
+                "main.create_job_request_processing", new_callable=AsyncMock
+            ) as mock_claim,
+            patch(
+                "main.await_existing_job_request", new_callable=AsyncMock
+            ) as mock_existing,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_video,
+        ):
+            mock_resolve.return_value = (
+                "wan-video/wan2.6-i2v-flash",
+                {},
+                {"seconds": 6, "resolution": "768p", "fps": None},
+            )
+            mock_claim.return_value = False
+            mock_existing.return_value = {
+                "video_url": "https://cached/video.mp4",
+                "final_url": "https://cached/final.mp4",
+                "requestId": "stale-request-id",
+            }
+
+            response = self.client.post(
+                "/jobs_prompt_only",
+                headers={"x-request-id": "corr-replay"},
+                json={
+                    "image_url": "https://example.com/pet.jpg",
+                    "prompt": "A smiling pet",
+                    "request_id": "11111111-1111-1111-1111-111111111111",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["requestId"], "corr-replay")
+        self.assertEqual(response.headers.get("x-request-id"), "corr-replay")
+        mock_video.assert_not_called()
+
     def test_success_payloads_include_request_id(self):
         resolve_response = self.client.post(
             "/resolve_model",

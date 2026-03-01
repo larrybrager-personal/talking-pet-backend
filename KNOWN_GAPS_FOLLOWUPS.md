@@ -24,3 +24,7 @@
 ## 2026-03-01 FFmpeg Runtime Follow-ups
 - Consider adding a dedicated `/debug/runtime` endpoint that surfaces sanitized dependency/bin readiness checks (ffmpeg, setuptools/pkg_resources availability) for faster ops triage.
 - Add CI coverage for startup event execution to ensure runtime smoke checks continue to run after FastAPI lifecycle refactors.
+
+## 2026-03-01 Dependency Follow-ups
+- After next Render deploy, confirm logs no longer emit `imageio_ffmpeg import failed ... No module named 'pkg_resources'` and capture a baseline startup log sample.
+- If any environment still reports `pkg_resources` errors, pin Render runtime Python image and add an automated startup self-check that imports `imageio_ffmpeg` and records version metadata.

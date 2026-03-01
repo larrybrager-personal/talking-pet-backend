@@ -84,6 +84,67 @@ class GetFfmpegPathTest(unittest.TestCase):
             text=True,
         )
 
+    def test_falls_back_to_path_on_unexpected_import_exception(self):
+        with (
+            patch.object(
+                main.importlib,
+                "import_module",
+                side_effect=Exception("No module named 'pkg_resources'"),
+            ),
+            patch.object(main.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(main.subprocess, "run") as mock_run,
+            patch.object(main.logger, "warning") as mock_warning,
+        ):
+            ffmpeg_path = main.get_ffmpeg_path()
+
+        self.assertEqual(ffmpeg_path, "/usr/bin/ffmpeg")
+        mock_run.assert_called_once_with(
+            ["/usr/bin/ffmpeg", "-version"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertTrue(mock_warning.called)
+        warning_message = mock_warning.call_args[0][0]
+        self.assertIn("setuptools", warning_message)
+
+    def test_raises_http_500_when_imageio_and_path_ffmpeg_missing(self):
+        with (
+            patch.object(
+                main.importlib, "import_module", side_effect=ImportError("missing")
+            ),
+            patch.object(main.shutil, "which", return_value=None),
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                main.get_ffmpeg_path()
+
+        self.assertEqual(exc.exception.status_code, 500)
+        self.assertEqual(exc.exception.detail, "ffmpeg not available in runtime")
+
+
+class FfmpegSmokeCheckTest(unittest.TestCase):
+    def test_logs_warning_when_ffmpeg_unavailable(self):
+        with (
+            patch(
+                "main.get_ffmpeg_path",
+                side_effect=HTTPException(500, "ffmpeg not available in runtime"),
+            ),
+            patch.object(main.logger, "warning") as mock_warning,
+        ):
+            main.run_ffmpeg_runtime_smoke_check()
+
+        self.assertTrue(mock_warning.called)
+
+    def test_logs_info_when_ffmpeg_available(self):
+        with (
+            patch("main.get_ffmpeg_path", return_value="/usr/bin/ffmpeg"),
+            patch.object(main.logger, "info") as mock_info,
+        ):
+            main.run_ffmpeg_runtime_smoke_check()
+
+        self.assertTrue(mock_info.called)
+
     def test_returns_path_when_ffmpeg_available(self):
         try:
             ffmpeg_path = main.get_ffmpeg_path()

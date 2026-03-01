@@ -20,3 +20,7 @@
 ## 2026-02-28 Debug Final Video Contract Follow-ups
 - Add explicit Pydantic `response_model` for `/debug/final_video` so OpenAPI and generated clients enforce `{ final_url, diagnostics }` at schema level instead of relying only on docs/tests.
 - Consider splitting `diagnostics` into typed sub-objects (`delivery`, `probe`, `compression`) to reduce frontend `object` casts and improve generated SDK ergonomics.
+
+## 2026-03-01 FFmpeg Runtime Follow-ups
+- Consider adding a dedicated `/debug/runtime` endpoint that surfaces sanitized dependency/bin readiness checks (ffmpeg, setuptools/pkg_resources availability) for faster ops triage.
+- Add CI coverage for startup event execution to ensure runtime smoke checks continue to run after FastAPI lifecycle refactors.

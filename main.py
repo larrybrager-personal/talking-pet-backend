@@ -1014,12 +1014,11 @@ def get_ffmpeg_path() -> str:
     ffmpeg_path = None
     try:
         imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
-    except ImportError as exc:  # pragma: no cover - fallback path in production
-        logger.warning(
-            "imageio_ffmpeg import failed; falling back to PATH ffmpeg: %s",
-            str(exc),
-            exc_info=True,
-        )
+    except Exception as exc:  # pragma: no cover - fallback path in production
+        warning = "imageio_ffmpeg import failed; falling back to PATH ffmpeg: %s"
+        if "pkg_resources" in str(exc):
+            warning += " (hint: install setuptools to provide pkg_resources)"
+        logger.warning(warning, str(exc))
     else:
         try:
             ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -1027,7 +1026,6 @@ def get_ffmpeg_path() -> str:
             logger.warning(
                 "imageio_ffmpeg.get_ffmpeg_exe failed; falling back to PATH ffmpeg: %s",
                 str(exc),
-                exc_info=True,
             )
 
     if not ffmpeg_path:
@@ -1058,6 +1056,26 @@ def get_ffmpeg_path() -> str:
 
     logger.info("Using ffmpeg binary at path=%s", ffmpeg_path)
     return ffmpeg_path
+
+
+def run_ffmpeg_runtime_smoke_check() -> None:
+    """Log ffmpeg availability during startup so runtime issues surface earlier."""
+
+    try:
+        ffmpeg_path = get_ffmpeg_path()
+    except HTTPException:
+        logger.warning(
+            "ffmpeg runtime smoke check failed; install setuptools (for pkg_resources) and ensure ffmpeg is on PATH"
+        )
+    else:
+        logger.info("ffmpeg runtime smoke check passed (path=%s)", ffmpeg_path)
+
+
+@app.on_event("startup")
+async def startup_runtime_checks() -> None:
+    """Run startup-time runtime checks."""
+
+    run_ffmpeg_runtime_smoke_check()
 
 
 async def mux_video_audio(video_url: str, audio_url: str) -> bytes:

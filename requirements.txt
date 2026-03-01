@@ -3,6 +3,4 @@ fastapi
 uvicorn[standard]
 httpx
 python-dotenv
-imageio-ffmpeg==0.4.9
-setuptools>=68
-wheel>=0.42
+imageio-ffmpeg==0.6.0

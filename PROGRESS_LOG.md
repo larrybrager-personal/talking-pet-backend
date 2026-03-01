@@ -101,3 +101,7 @@
 - Added startup runtime smoke check (`run_ffmpeg_runtime_smoke_check`) so ffmpeg availability issues are logged early during app boot.
 - Updated deployment packaging (`requirements.txt`, `render.yaml`, README deployment note) to reliably install/upgrade `setuptools` and `wheel` on Render.
 - Extended ffmpeg tests to cover generic import failures, missing PATH fallback behavior, and smoke-check logging outcomes.
+
+## 2026-03-01
+- Updated runtime dependency pin from `imageio-ffmpeg==0.4.9` to `imageio-ffmpeg==0.6.0` to avoid legacy `pkg_resources` import paths that surface as Render runtime warnings/errors when setuptools metadata support is unavailable.
+- Kept dependency footprint minimal by removing explicit `setuptools`/`wheel` runtime pins from `requirements.txt` and relying on Render build toolchain bootstrap already defined in `render.yaml`.

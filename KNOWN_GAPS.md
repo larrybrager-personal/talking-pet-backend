@@ -23,3 +23,6 @@
 
 - Add endpoint-level tests for `/jobs_prompt_tts` failed-idempotency branch to verify deterministic 409 response and no rerun on stored failures.
 - Consider adding stale `processing` recovery (heartbeat/lease ownership) for crashed owner requests so duplicates can eventually fail fast with clearer remediation.
+- Add integration tests that simulate transient provider failures (e.g., 502 then 200) and assert retry counts/backoff behavior for ElevenLabs and Replicate calls.
+- Evaluate routing idempotency semantics for header-based correlation IDs vs explicit body `request_id` to avoid accidental coupling between tracing and deduplication concerns.
+- Add parity regression coverage for idempotent replay request-id alignment on `/jobs_prompt_tts` (current test covers `/jobs_prompt_only`).

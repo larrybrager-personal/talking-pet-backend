@@ -10,15 +10,19 @@ import logging
 import os
 import secrets
 import uuid
+import random
 import tempfile
 import shutil
 import subprocess
+from http import HTTPStatus
 from datetime import datetime, timezone
 from typing import Any, Tuple
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:  # Pydantic v2
@@ -93,6 +97,103 @@ app.add_middleware(
 )
 
 logger = logging.getLogger("talking_pet_backend")
+
+RETRYABLE_STATUS_CODES = (429, 502, 503, 504)
+
+
+def _request_id_from_request(request: Request) -> str:
+    """Return request correlation id from middleware state or generate fallback."""
+
+    request_id = getattr(request.state, "request_id", None)
+    if not request_id:
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+    return request_id
+
+
+def _with_request_id(payload: dict[str, Any], request_id: str) -> dict[str, Any]:
+    """Return a shallow payload copy with requestId aligned to current request."""
+
+    payload_with_request_id = payload.copy()
+    payload_with_request_id["requestId"] = request_id
+    return payload_with_request_id
+
+
+def _error_response(
+    *,
+    status_code: int,
+    request: Request,
+    error: str,
+    detail: str,
+) -> JSONResponse:
+    """Build standardized JSON API error payloads with correlation metadata."""
+
+    request_id = _request_id_from_request(request)
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error, "detail": detail, "requestId": request_id},
+        headers={"x-request-id": request_id},
+    )
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Attach correlation ids to request state and response headers."""
+
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["x-request-id"] = request_id
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Return consistent JSON errors for FastAPI HTTP exceptions."""
+
+    try:
+        summary = HTTPStatus(exc.status_code).phrase
+    except ValueError:
+        summary = "Request failed"
+    detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
+    return _error_response(
+        status_code=exc.status_code,
+        request=request,
+        error=summary,
+        detail=detail,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Return consistent JSON errors for request payload validation failures."""
+
+    return _error_response(
+        status_code=422,
+        request=request,
+        error="Validation error",
+        detail=str(exc),
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch unhandled errors and return safe client-facing messages."""
+
+    request_id = _request_id_from_request(request)
+    logger.exception(
+        "unhandled_exception request_id=%s error_type=%s",
+        request_id,
+        type(exc).__name__,
+    )
+    return _error_response(
+        status_code=500,
+        request=request,
+        error="Internal server error",
+        detail="Unexpected server error",
+    )
 
 
 def _log_unexpected_job_error(
@@ -436,7 +537,63 @@ def build_model_payload(
     return payload
 
 
-async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
+async def _request_with_retries(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    request_id: str | None = None,
+    attempts: int = 3,
+    base_delay: float = 0.4,
+    max_delay: float = 2.5,
+    retry_status_codes: tuple[int, ...] = RETRYABLE_STATUS_CODES,
+    **kwargs,
+) -> httpx.Response:
+    """Execute HTTP requests with bounded retries for transient upstream failures."""
+
+    for attempt in range(1, attempts + 1):
+        try:
+            response = await client.request(method, url, **kwargs)
+        except httpx.TransportError as exc:
+            if attempt >= attempts:
+                raise
+            delay = min(max_delay, base_delay * (2 ** (attempt - 1))) + random.uniform(
+                0, 0.2
+            )
+            logger.warning(
+                "upstream_retry request_id=%s method=%s url=%s attempt=%s reason=%s",
+                request_id,
+                method,
+                url,
+                attempt,
+                type(exc).__name__,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        if response.status_code in retry_status_codes and attempt < attempts:
+            delay = min(max_delay, base_delay * (2 ** (attempt - 1))) + random.uniform(
+                0, 0.2
+            )
+            logger.warning(
+                "upstream_retry request_id=%s method=%s url=%s attempt=%s status=%s",
+                request_id,
+                method,
+                url,
+                attempt,
+                response.status_code,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        return response
+
+    raise RuntimeError("Retry loop exited unexpectedly")
+
+
+async def elevenlabs_tts_bytes(
+    text: str, voice_id: str, request_id: str | None = None
+) -> bytes:
     """Generate speech with ElevenLabs and return it as raw bytes.
 
     Args:
@@ -458,8 +615,11 @@ async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(
+        r = await _request_with_retries(
+            client,
+            "POST",
             url,
+            request_id=request_id,
             headers={
                 "xi-api-key": ELEVEN_API_KEY,
                 "Content-Type": "application/json",
@@ -470,7 +630,8 @@ async def elevenlabs_tts_bytes(text: str, voice_id: str) -> bytes:
                 "output_format": TTS_OUTPUT_FORMAT,
             },
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise HTTPException(r.status_code, f"ElevenLabs TTS failed: {r.text}")
         audio = r.content
         if len(audio) > 9_500_000:
             raise HTTPException(
@@ -904,6 +1065,7 @@ async def replicate_video_from_prompt(
     audio_url: str = None,
     fps: int | None = None,
     input_params: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> str:
     """Create a video using a specified Replicate model."""
 
@@ -923,7 +1085,14 @@ async def replicate_video_from_prompt(
     create_url = f"https://api.replicate.com/v1/models/{model}/predictions"
 
     async with httpx.AsyncClient(timeout=600) as client:
-        create = await client.post(create_url, headers=headers, json=payload)
+        create = await _request_with_retries(
+            client,
+            "POST",
+            create_url,
+            request_id=request_id,
+            headers=headers,
+            json=payload,
+        )
         if create.status_code >= 400:
             raise HTTPException(
                 create.status_code,
@@ -935,11 +1104,19 @@ async def replicate_video_from_prompt(
             raise HTTPException(500, "Replicate missing prediction id")
 
         while True:
-            getr = await client.get(
+            getr = await _request_with_retries(
+                client,
+                "GET",
                 f"https://api.replicate.com/v1/predictions/{pred_id}",
+                request_id=request_id,
+                attempts=2,
                 headers=headers,
             )
-            getr.raise_for_status()
+            if getr.status_code >= 400:
+                raise HTTPException(
+                    getr.status_code,
+                    f"Replicate prediction status lookup failed: {getr.text}",
+                )
             data = getr.json()
             status = data.get("status")
             if status in ("succeeded", "failed", "canceled"):
@@ -969,11 +1146,20 @@ async def generate_video_from_prompt(
     audio_url: str = None,
     fps: int | None = None,
     input_params: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> str:
     """Create a talking-pet style video using the specified Replicate model."""
 
     return await replicate_video_from_prompt(
-        model, image_url, prompt, seconds, resolution, audio_url, fps, input_params
+        model,
+        image_url,
+        prompt,
+        seconds,
+        resolution,
+        audio_url,
+        fps,
+        input_params,
+        request_id,
     )
 
 
@@ -1258,7 +1444,9 @@ async def list_supported_models(_: None = Depends(require_auth)):
 
 
 @app.post("/resolve_model")
-async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)):
+async def resolve_model(
+    request: Request, req: ModelIntentRequest, _: None = Depends(require_auth)
+):
     """Resolve model selection from high-level user intent."""
 
     normalized_quality = normalize_quality(req.quality)
@@ -1310,6 +1498,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             "plan_tier": plan_tier,
             "meta": meta,
             "resolved": {**resolved_settings},
+            "requestId": _request_id_from_request(request),
         }
 
     try:
@@ -1328,6 +1517,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
         "plan_tier": effective_plan_tier,
         "meta": resolved["resolved_meta"],
         "resolved": resolved["resolved"],
+        "requestId": _request_id_from_request(request),
     }
 
 
@@ -1413,8 +1603,11 @@ async def _resolve_job_model(
 
 
 @app.post("/jobs_prompt_only")
-async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_auth)):
+async def create_job_with_prompt(
+    request: Request, req: JobPromptOnly, _: None = Depends(require_auth)
+):
     """Generate a video from a static image and text prompt."""
+    request_id = _request_id_from_request(request)
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
 
@@ -1446,7 +1639,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                 "idempotency_request endpoint=/jobs_prompt_only request_id=%s owner=false deduped=true",
                 normalized_request_id,
             )
-            return existing_response
+            return _with_request_id(existing_response, request_id)
 
     try:
         video_url = await generate_video_from_prompt(
@@ -1457,6 +1650,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             resolved["resolution"],
             fps=resolved.get("fps"),
             input_params=input_params,
+            request_id=request_id,
         )
         video_bytes = await fetch_binary(video_url)
         upload_ready_bytes, compression_debug = prepare_video_for_upload_with_debug(
@@ -1501,7 +1695,10 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             await supabase_delete(final_key)
             raise
 
-        response_payload = {"video_url": video_url, "final_url": final_url}
+        response_payload = {
+            "video_url": video_url,
+            "final_url": final_url,
+        }
         if normalized_request_id:
             await update_job_request(
                 normalized_request_id,
@@ -1509,7 +1706,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                 response_payload=response_payload,
                 error=None,
             )
-        return response_payload
+        return _with_request_id(response_payload, request_id)
     except HTTPException as exc:
         if normalized_request_id:
             await update_job_request(
@@ -1523,7 +1720,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             endpoint="/jobs_prompt_only",
             exc=exc,
             model=model,
-            request_id=normalized_request_id,
+            request_id=request_id,
             user_id=user_id,
         )
         if normalized_request_id:
@@ -1537,9 +1734,10 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
 
 @app.post("/jobs_prompt_tts")
 async def create_job_with_prompt_and_tts(
-    req: JobPromptTTS, _: None = Depends(require_auth)
+    request: Request, req: JobPromptTTS, _: None = Depends(require_auth)
 ):
     """Generate a video with synchronized speech."""
+    request_id = _request_id_from_request(request)
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
 
@@ -1571,13 +1769,15 @@ async def create_job_with_prompt_and_tts(
                 "idempotency_request endpoint=/jobs_prompt_tts request_id=%s owner=false deduped=true",
                 normalized_request_id,
             )
-            return existing_response
+            return _with_request_id(existing_response, request_id)
 
     final_key: str | None = None
     audio_key: str | None = None
 
     try:
-        mp3_bytes = await elevenlabs_tts_bytes(req.text, req.voice_id)
+        mp3_bytes = await elevenlabs_tts_bytes(
+            req.text, req.voice_id, request_id=request_id
+        )
         audio_key = build_storage_key(prefix, "audio", "mp3")
         audio_public_url = await supabase_upload(mp3_bytes, audio_key, "audio/mpeg")
 
@@ -1594,6 +1794,7 @@ async def create_job_with_prompt_and_tts(
                 audio_public_url,
                 resolved.get("fps"),
                 input_params,
+                request_id,
             )
             final_key = build_storage_key(prefix, "videos", "mp4")
             final_bytes = await fetch_binary(video_url)
@@ -1612,6 +1813,7 @@ async def create_job_with_prompt_and_tts(
                 resolved["resolution"],
                 fps=resolved.get("fps"),
                 input_params=input_params,
+                request_id=request_id,
             )
 
             final_bytes = await mux_video_audio(video_url, audio_public_url)
@@ -1663,7 +1865,7 @@ async def create_job_with_prompt_and_tts(
                 error=None,
             )
 
-        return response_payload
+        return _with_request_id(response_payload, request_id)
     except HTTPException as exc:
         if final_key:
             await supabase_delete(final_key)
@@ -1681,7 +1883,7 @@ async def create_job_with_prompt_and_tts(
             endpoint="/jobs_prompt_tts",
             exc=exc,
             model=model,
-            request_id=normalized_request_id,
+            request_id=request_id,
             user_id=user_id,
         )
         if final_key:

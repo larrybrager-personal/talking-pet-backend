@@ -94,3 +94,10 @@
 - Reduced ffmpeg subprocess memory overhead by using `stdout=DEVNULL` + `stderr=PIPE` (no `capture_output=True`) and preserved stable API errors (`ffmpeg mux failed`, `ffmpeg not available in runtime`).
 - Closed mux output file deterministically with context manager before temp cleanup.
 - Added hermetic unit tests for ffmpeg resolution priority/fallback and mux HTTP 500 error mapping for ffmpeg failure and missing-runtime scenarios.
+
+## 2026-03-01
+- Hardened ffmpeg resolution by broadening `imageio_ffmpeg` import fallback handling in `get_ffmpeg_path()` and removing warning tracebacks for expected fallback paths.
+- Added a targeted warning hint for `pkg_resources` import errors to recommend installing `setuptools`.
+- Added startup runtime smoke check (`run_ffmpeg_runtime_smoke_check`) so ffmpeg availability issues are logged early during app boot.
+- Updated deployment packaging (`requirements.txt`, `render.yaml`, README deployment note) to reliably install/upgrade `setuptools` and `wheel` on Render.
+- Extended ffmpeg tests to cover generic import failures, missing PATH fallback behavior, and smoke-check logging outcomes.

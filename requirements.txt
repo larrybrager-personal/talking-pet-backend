@@ -1,12 +1,8 @@
-# ---- requirements.txt (create this file at repo root) ----
-# Copy exactly these lines:
-# fastapi web framework
+# Runtime dependencies
 fastapi
-# ASGI server for FastAPI
 uvicorn[standard]
-# HTTP client for provider calls (ElevenLabs, D-ID, Supabase REST)
 httpx
-# Load env vars in local dev
 python-dotenv
 imageio-ffmpeg==0.4.9
 setuptools>=68
+wheel>=0.42

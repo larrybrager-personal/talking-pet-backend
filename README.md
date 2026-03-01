@@ -258,6 +258,14 @@ When `API_AUTH_ENABLED=false` (default), auth is bypassed.
 ## Deployment
 A Render spec is provided in `render.yaml`.
 
+For reliable runtime packaging on Render, the build command upgrades installer tooling before installing requirements:
+
+```bash
+python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+```
+
+This ensures `setuptools` (and `pkg_resources`) is present for `imageio-ffmpeg` ffmpeg resolution.
+
 - Build: `pip install -r requirements.txt`
 - Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 

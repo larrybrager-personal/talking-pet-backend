@@ -45,3 +45,9 @@
 - Updated mux/compress ffmpeg subprocess calls to avoid `capture_output=True` and reduced memory pressure with DEVNULL/PIPE stream handling.
 - Ensured temp-dir cleanup cannot mask primary failures by switching to `ignore_errors=True` cleanup in ffmpeg temp workflows.
 - Added deterministic unit tests for ffmpeg resolution behavior and mux HTTPException mappings.
+
+
+## 2026-03-02 - Compression fallback for 502 mitigation
+- Added ffmpeg compression fallback from `libx264` to `mpeg4` when the primary encoder is not available in runtime.
+- Added warning logs per failed compression attempt with encoder name and sanitized stderr for faster debugging.
+- Added regression tests covering fallback success and total encoder failure propagation.

@@ -43,6 +43,55 @@ class PrepareVideoForUploadTest(unittest.TestCase):
         self.assertIn("too large", exc.exception.detail)
 
 
+class CompressVideoBytesFallbackTest(unittest.TestCase):
+    def test_falls_back_to_mpeg4_when_libx264_fails(self):
+        first_error = subprocess.CalledProcessError(
+            1,
+            ["/usr/bin/ffmpeg"],
+            stderr="Unknown encoder 'libx264'",
+        )
+
+        with (
+            patch("main.get_ffmpeg_path", return_value="/usr/bin/ffmpeg"),
+            patch("main.tempfile.mkdtemp", return_value="/tmp/compress-test"),
+            patch("main.shutil.rmtree"),
+            patch(
+                "builtins.open",
+                side_effect=[
+                    unittest.mock.mock_open().return_value,
+                    unittest.mock.mock_open(read_data=b"compressed").return_value,
+                ],
+            ),
+            patch("main.logger.warning") as mock_warning,
+            patch(
+                "main.subprocess.run",
+                side_effect=[first_error, None],
+            ) as mock_run,
+        ):
+            out = main._compress_video_bytes(b"video-bytes", 28)
+
+        self.assertEqual(out, b"compressed")
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertTrue(mock_warning.called)
+
+    def test_raises_when_all_encoders_fail(self):
+        failure = subprocess.CalledProcessError(
+            1,
+            ["/usr/bin/ffmpeg"],
+            stderr="all encoders failed",
+        )
+
+        with (
+            patch("main.get_ffmpeg_path", return_value="/usr/bin/ffmpeg"),
+            patch("main.tempfile.mkdtemp", return_value="/tmp/compress-test"),
+            patch("main.shutil.rmtree"),
+            patch("builtins.open", unittest.mock.mock_open()),
+            patch("main.subprocess.run", side_effect=[failure, failure]),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                main._compress_video_bytes(b"video-bytes", 28)
+
+
 class GetFfmpegPathTest(unittest.TestCase):
     def setUp(self):
         main.get_ffmpeg_path.cache_clear()

@@ -1137,33 +1137,75 @@ def _compress_video_bytes(video_bytes: bytes, crf: int) -> bytes:
             infile.write(video_bytes)
 
         ffmpeg_path = get_ffmpeg_path()
-        cmd = [
-            ffmpeg_path,
-            "-y",
-            "-i",
-            in_path,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            str(crf),
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-            out_path,
+        commands = [
+            [
+                ffmpeg_path,
+                "-y",
+                "-i",
+                in_path,
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                str(crf),
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                out_path,
+            ],
+            [
+                ffmpeg_path,
+                "-y",
+                "-i",
+                in_path,
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                str(max(6, min(31, int(crf / 3)))),
+                "-c:a",
+                "aac",
+                "-movflags",
+                "+faststart",
+                out_path,
+            ],
         ]
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
 
-        with open(out_path, "rb") as outfile:
-            return outfile.read()
+        last_error: subprocess.CalledProcessError | None = None
+        for cmd in commands:
+            try:
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                with open(out_path, "rb") as outfile:
+                    return outfile.read()
+            except subprocess.CalledProcessError as exc:
+                last_error = exc
+                encoder_name = "unknown"
+                if "-c:v" in cmd:
+                    encoder_name = cmd[cmd.index("-c:v") + 1]
+                logger.warning(
+                    "video compression attempt failed encoder=%s stderr=%s",
+                    encoder_name,
+                    (exc.stderr or "").strip(),
+                )
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("video compression command unexpectedly produced no result")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 

@@ -238,3 +238,25 @@ async function getSupportedModels() {
   return res.json();
 }
 ```
+
+## Cursor Cloud specific instructions
+
+### Service overview
+Single Python FastAPI backend (`main.py`) — no database or Docker required to start the dev server or run tests. All external services (Replicate, ElevenLabs, Supabase) are mocked in unit tests.
+
+### Running the dev server
+```bash
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+Endpoints that hit external APIs (`/jobs_prompt_only`, `/jobs_prompt_tts`) require the mandatory env vars (`ELEVEN_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE`, `REPLICATE_API_TOKEN`). The `/health`, `/models`, and `/debug/head` endpoints work without any secrets.
+
+### Lint / format / test commands
+See the **Testing / Validation** section above for standard commands (`flake8 main.py`, `black --check main.py`, `python -m py_compile main.py`). Unit tests:
+```bash
+python -m unittest discover -s tests -v
+```
+
+### Caveats
+- `flake8` and `black` are dev-only tools not listed in `requirements.txt`; the update script installs them separately.
+- `~/.local/bin` must be on `PATH` for user-installed binaries (`uvicorn`, `flake8`, `black`). Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` if not already present.
+- The existing codebase has a few pre-existing flake8 warnings (unused imports, one long line) — these are not regressions.

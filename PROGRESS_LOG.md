@@ -105,3 +105,9 @@
 ## 2026-03-01
 - Updated runtime dependency pin from `imageio-ffmpeg==0.4.9` to `imageio-ffmpeg==0.6.0` to avoid legacy `pkg_resources` import paths that surface as Render runtime warnings/errors when setuptools metadata support is unavailable.
 - Kept dependency footprint minimal by removing explicit `setuptools`/`wheel` runtime pins from `requirements.txt` and relying on Render build toolchain bootstrap already defined in `render.yaml`.
+
+
+## 2026-03-02
+- Fixed video compression robustness for Render/runtime environments where `libx264` is unavailable by adding a fallback ffmpeg encode path (`mpeg4` + AAC) in `_compress_video_bytes`.
+- Preserved existing API behavior (`prepare_video_for_upload_with_debug`) while preventing unexpected compression-stage 500s that surfaced as upstream 502s.
+- Added unit tests for compression fallback success and all-encoders-fail handling in `tests/test_video_compression.py`.

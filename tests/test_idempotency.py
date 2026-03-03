@@ -6,6 +6,22 @@ from fastapi import HTTPException
 
 
 class IdempotencyBehaviorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_prompt_only_invalid_image_url_fails_before_claiming_request_id(self):
+        req = main.JobPromptOnly(
+            image_url="file:///tmp/pet.jpg",
+            prompt="Say hi",
+            request_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+
+        with patch(
+            "main.create_job_request_processing", new_callable=AsyncMock
+        ) as mock_create_processing:
+            with self.assertRaises(HTTPException) as ctx:
+                await main.create_job_with_prompt(req)
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        mock_create_processing.assert_not_awaited()
+
     async def test_prompt_only_invalid_model_fails_before_claiming_request_id(self):
         req = main.JobPromptOnly(
             image_url="https://example.com/pet.jpg",
@@ -149,6 +165,96 @@ class IdempotencyBehaviorTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         mock_sleep.assert_awaited_once()
+
+    async def test_success_response_is_not_masked_by_idempotency_write_failure(self):
+        req = main.JobPromptOnly(
+            image_url="https://example.com/pet.jpg",
+            prompt="Say hi",
+            request_id="44444444-4444-4444-4444-444444444444",
+            user_context=main.UserContext(id="00000000-0000-0000-0000-000000000000"),
+        )
+
+        with (
+            patch(
+                "main.create_job_request_processing", new_callable=AsyncMock
+            ) as mock_create_processing,
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed", {"meets_target": True}),
+            ),
+            patch("main.build_storage_key", return_value="videos/final.mp4"),
+            patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch("main.insert_pet_video", new_callable=AsyncMock),
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
+            patch(
+                "main.update_job_request",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(500, "idempotency write failed"),
+            ),
+        ):
+            mock_create_processing.return_value = True
+            mock_resolve.return_value = (
+                "wan-video/wan2.6-i2v-flash",
+                {},
+                {"seconds": 5, "resolution": "720p", "fps": None},
+            )
+            mock_generate.return_value = "https://model/video.mp4"
+            mock_fetch.return_value = b"video-bytes"
+            mock_upload.return_value = "https://public/final.mp4"
+            mock_debug.return_value = {"head_status": 200, "content_length": 100}
+
+            result = await main.create_job_with_prompt(req)
+
+        self.assertEqual(
+            result,
+            {
+                "video_url": "https://model/video.mp4",
+                "final_url": "https://public/final.mp4",
+            },
+        )
+
+    async def test_failure_response_is_not_masked_by_idempotency_write_failure(self):
+        req = main.JobPromptOnly(
+            image_url="https://example.com/pet.jpg",
+            prompt="Say hi",
+            request_id="55555555-5555-5555-5555-555555555555",
+        )
+
+        with (
+            patch(
+                "main.create_job_request_processing", new_callable=AsyncMock
+            ) as mock_create_processing,
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch(
+                "main.generate_video_from_prompt",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(400, "provider rejected request"),
+            ),
+            patch(
+                "main.update_job_request",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(500, "idempotency write failed"),
+            ),
+        ):
+            mock_create_processing.return_value = True
+            mock_resolve.return_value = (
+                "wan-video/wan2.6-i2v-flash",
+                {},
+                {"seconds": 5, "resolution": "720p", "fps": None},
+            )
+
+            with self.assertRaises(HTTPException) as exc:
+                await main.create_job_with_prompt(req)
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail, "provider rejected request")
 
     async def test_create_processing_rejects_cross_endpoint_conflict(self):
         with (

@@ -261,7 +261,7 @@ class FinalVideoDebugTest(unittest.IsolatedAsyncioTestCase):
                 return_value=(b"compressed-video", {"meets_target": True}),
             ),
             patch("main.build_storage_key", return_value="videos/final.mp4"),
-            patch("main.insert_pet_video", new_callable=AsyncMock),
+            patch("main.insert_pet_video", new_callable=AsyncMock) as mock_insert,
             patch(
                 "main.collect_video_delivery_debug", new_callable=AsyncMock
             ) as mock_debug,
@@ -277,6 +277,7 @@ class FinalVideoDebugTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(exc.exception.status_code, 502)
         mock_delete.assert_awaited_once_with("videos/final.mp4")
+        mock_insert.assert_not_awaited()
 
     async def test_debug_final_video_returns_probe_data(self):
         req = main.FinalVideoDebugRequest(url="https://public.final/video.mp4")

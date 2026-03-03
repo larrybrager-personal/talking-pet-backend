@@ -59,6 +59,17 @@ def normalize_video_model(model: str | None) -> str:
     return DEFAULT_MODEL
 
 
+def resolve_explicit_video_model(model: str | None) -> str:
+    """Resolve an explicit user-provided model, rejecting unknown identifiers."""
+
+    if not model:
+        raise ValueError("Model override must be provided.")
+    normalized = LEGACY_MODEL_ALIASES.get(model, model)
+    if normalized in SUPPORTED_MODELS:
+        return normalized
+    raise ValueError(f"Unsupported model '{model}'.")
+
+
 def get_default_video_model(mode: str = "fast") -> str:
     """Return default model slug for a routing mode, falling back to fast."""
 
@@ -238,12 +249,16 @@ async def resolve_model_for_intent(intent: dict[str, Any]) -> IntentResolutionRe
     resolution = str(intent.get("resolution") or "768p")
     fps = intent.get("fps")
 
-    user_context = intent.get("user_context") or {}
-    plan_tier = await resolve_plan_tier(
-        user_context,
-        os.getenv("SUPABASE_URL", ""),
-        os.getenv("SUPABASE_SERVICE_ROLE", ""),
-    )
+    explicit_plan_tier = str(intent.get("plan_tier") or "").strip().lower()
+    if explicit_plan_tier in PLAN_RANK:
+        plan_tier = explicit_plan_tier
+    else:
+        user_context = intent.get("user_context") or {}
+        plan_tier = await resolve_plan_tier(
+            user_context,
+            os.getenv("SUPABASE_URL", ""),
+            os.getenv("SUPABASE_SERVICE_ROLE", ""),
+        )
 
     model_slug = _pick_model_for_quality(requested_quality, plan_tier)
     model_config = SUPPORTED_MODELS[model_slug]

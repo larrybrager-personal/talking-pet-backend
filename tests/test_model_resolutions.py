@@ -138,6 +138,20 @@ class BuildModelPayloadResolutionTestCase(unittest.TestCase):
         self.assertEqual(payload["input"]["num_frames"], 121)
         self.assertNotIn("fps", payload["input"])
 
+    def test_wan22_num_frames_accepts_int_like_float_fps(self):
+        payload = main.build_model_payload(
+            "wan-video/wan-2.2-5b-fast",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=5,
+            resolution="720p",
+            input_params={"fps": 24.0},
+        )
+
+        self.assertEqual(payload["input"]["frames_per_second"], 24)
+        self.assertEqual(payload["input"]["num_frames"], 121)
+        self.assertIsInstance(payload["input"]["frames_per_second"], int)
+
 
 class ModelNormalizationTestCase(unittest.TestCase):
     def test_legacy_slugs_are_normalized(self):
@@ -405,6 +419,50 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["plan_tier"], "creator")
         self.assertEqual(payload["meta"]["plan_tier"], "creator")
+
+    def test_resolve_model_auto_route_exposes_plan_tier_and_resolved_defaults(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "free"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 6,
+                    "resolution": "1080p",
+                    "quality": "fast",
+                    "modelParams": {"guidance_scale": 4.5},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["plan_tier"], "free")
+        self.assertEqual(payload["meta"]["plan_tier"], "free")
+        self.assertIn("resolved_defaults", payload)
+        self.assertEqual(payload["resolved_defaults"]["guidance_scale"], 4.5)
+
+        tunables = payload["meta"]["tunable_params"]
+        self.assertTrue(tunables)
+        self.assertIn("description", tunables[0])
+
+    def test_resolve_model_override_returns_effective_param_defaults(self):
+        with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
+            mock_tier.return_value = "creator"
+            response = self.client.post(
+                "/resolve_model",
+                json={
+                    "seconds": 10,
+                    "resolution": "1080p",
+                    "quality": "fast",
+                    "fps": 30,
+                    "model_override": "wan-video/wan2.6-i2v-flash",
+                    "model_params": {"fps": 24},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("resolved_defaults", payload)
+        self.assertEqual(payload["resolved_defaults"]["fps"], 30)
 
 
 class PlanTierAndFpsEnforcementTestCase(unittest.TestCase):

@@ -52,6 +52,7 @@ The backend will normalize request settings to model-supported values:
 - `model_params` are filtered to an allowlist for the chosen model.
 
 Treat `resolved` values from `POST /resolve_model` as source-of-truth preview values.
+Use `resolved_defaults` from `POST /resolve_model` as the backend-filtered parameter set that will be passed to Replicate input shaping.
 
 ## 5) Prompt-only request example
 
@@ -92,7 +93,7 @@ Treat `resolved` values from `POST /resolve_model` as source-of-truth preview va
 |---|---|
 | `GET /health` | `{ ok: boolean }` |
 | `GET /models` | `{ supported_models: Record<string, ModelMeta>, default_model: string, routing_defaults: RoutingDefaults }` |
-| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string } }` |
+| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string }, resolved_defaults: object }` |
 | `POST /jobs_prompt_only` | `{ video_url: string, final_url: string }` |
 | `POST /jobs_prompt_tts` | `{ audio_url: string, video_url: string, final_url: string }` |
 | `POST /debug/head` | `{ status: number, content_type: string \| null, bytes: number \| null }` |

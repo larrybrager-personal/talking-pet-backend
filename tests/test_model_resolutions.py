@@ -224,6 +224,28 @@ class RoutingResolutionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["resolved_model_slug"], "bytedance/seedance-1-pro-fast")
         self.assertEqual(result["resolved"]["resolution"], "480p")
 
+    async def test_pre_resolved_plan_tier_skips_secondary_profile_lookup(self):
+        with patch(
+            "model_routing.resolve_plan_tier", new_callable=AsyncMock
+        ) as mock_tier:
+            result = await main.resolve_model_for_intent(
+                {
+                    "seconds": 6,
+                    "resolution": "768p",
+                    "quality": "fast",
+                    "fps": 24,
+                    "plan_tier": "free",
+                    "has_audio": False,
+                    "user_context": {
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "plan_tier": "studio",
+                    },
+                }
+            )
+
+        self.assertEqual(result["plan_tier"], "free")
+        mock_tier.assert_not_awaited()
+
 
 class ModelsEndpointResolutionTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -292,6 +314,24 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 403)
+
+    def test_override_model_rejects_unknown_slug(self):
+        response = self.client.post(
+            "/resolve_model",
+            json={
+                "seconds": 6,
+                "resolution": "768p",
+                "quality": "fast",
+                "fps": 24,
+                "has_audio": False,
+                "model_override": "unknown/not-a-real-model",
+                "model_params": None,
+                "user_context": None,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported model", response.json()["detail"])
 
     def test_resolve_model_endpoint_shape_and_normalization(self):
         with patch(
@@ -598,6 +638,23 @@ class ResolveJobModelErrorMappingTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(exc.exception.status_code, 400)
         self.assertIn("Unable to resolve model settings", exc.exception.detail)
+
+    async def test_resolve_job_model_rejects_unknown_override_slug(self):
+        with self.assertRaises(main.HTTPException) as exc:
+            await main._resolve_job_model(
+                seconds=6,
+                resolution="720p",
+                quality="fast",
+                fps=None,
+                has_audio=False,
+                user_context=None,
+                model=None,
+                model_override="unknown/not-a-real-model",
+                model_params=None,
+            )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertIn("Unsupported model", exc.exception.detail)
 
 
 class JobsEndpointResponseContractTestCase(unittest.TestCase):

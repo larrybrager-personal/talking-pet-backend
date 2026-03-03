@@ -5,18 +5,22 @@ Minimal FastAPI backend (cleaned) for Talking Pet MVP.
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
 import secrets
-import uuid
-import tempfile
-import shutil
-import subprocess
 import importlib
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+import uuid
 from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Any, Tuple
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -30,7 +34,6 @@ except ImportError:  # Pydantic v1
 
 from model_registry import (
     DEFAULT_MODEL,
-    PROMPT_ONLY_FALLBACK_MODEL,
     SUPPORTED_MODELS,
     VIDEO_MODEL_ROUTES,
 )
@@ -44,6 +47,7 @@ from model_routing import (
     normalize_video_model,
     resolve_model_for_intent,
     normalize_quality,
+    resolve_explicit_video_model,
     resolve_plan_tier,
 )
 
@@ -80,6 +84,16 @@ ENABLE_FINAL_VIDEO_DEBUG = os.getenv("ENABLE_FINAL_VIDEO_DEBUG", "true").lower()
     "yes",
     "on",
 }
+REPLICATE_POLL_INTERVAL_SEC = float(os.getenv("REPLICATE_POLL_INTERVAL_SEC", "2"))
+REPLICATE_POLL_TIMEOUT_SEC = float(os.getenv("REPLICATE_POLL_TIMEOUT_SEC", "900"))
+FETCH_MAX_BYTES = int(os.getenv("FETCH_MAX_BYTES", "52428800"))
+DEBUG_FETCH_MAX_BYTES = int(os.getenv("DEBUG_FETCH_MAX_BYTES", "15728640"))
+ALLOW_PRIVATE_URL_FETCHES = os.getenv("ALLOW_PRIVATE_URL_FETCHES", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 PUBLIC_BASE = f"{SUPABASE_URL}/storage/v1/object/public"
 UPLOAD_BASE = f"{SUPABASE_URL}/storage/v1/object"
@@ -95,6 +109,9 @@ app.add_middleware(
 )
 
 logger = logging.getLogger("talking_pet_backend")
+
+# Backward-compatible re-exports used by tests/importers.
+_ROUTING_HELPERS_COMPAT = (normalize_video_model, get_default_video_model)
 
 
 def _log_unexpected_job_error(
@@ -115,6 +132,67 @@ def _log_unexpected_job_error(
         model,
         type(exc).__name__,
     )
+
+
+def _is_non_public_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True when an IP should not be fetched from user-controlled inputs."""
+
+    return (
+        not ip_obj.is_global
+        or ip_obj.is_loopback
+        or ip_obj.is_private
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+        or ip_obj.is_unspecified
+    )
+
+
+def _validate_outbound_url(url: str, *, allow_private: bool = False) -> None:
+    """Validate outbound URL scheme/host and block private-network SSRF targets."""
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(400, "URL must use http or https.")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(400, "URL must include a valid hostname.")
+
+    if allow_private:
+        return
+
+    try:
+        literal_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_ip = None
+
+    if literal_ip is not None:
+        if _is_non_public_ip(literal_ip):
+            raise HTTPException(400, "URL host is not publicly routable.")
+        return
+
+    try:
+        default_port = 443 if parsed.scheme == "https" else 80
+        addr_info = socket.getaddrinfo(
+            hostname,
+            parsed.port or default_port,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise HTTPException(400, "URL hostname could not be resolved.") from exc
+
+    for entry in addr_info:
+        sockaddr = entry[4]
+        if not sockaddr:
+            continue
+        resolved_host = sockaddr[0]
+        try:
+            ip_obj = ipaddress.ip_address(resolved_host)
+        except ValueError:
+            continue
+        if _is_non_public_ip(ip_obj):
+            raise HTTPException(400, "URL host resolves to a non-public address.")
 
 
 class RequestModel(BaseModel):
@@ -662,6 +740,29 @@ async def update_job_request(
         )
 
 
+async def update_job_request_best_effort(
+    request_id: str,
+    status: str,
+    response_payload: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    """Persist idempotency state while preserving the original request outcome."""
+
+    try:
+        await update_job_request(
+            request_id,
+            status,
+            response_payload=response_payload,
+            error=error,
+        )
+    except Exception:
+        logger.exception(
+            "idempotency_update_failed request_id=%s status=%s",
+            request_id,
+            status,
+        )
+
+
 async def await_existing_job_request(request_id: str) -> dict[str, Any]:
     """Wait for a processing idempotent request to finish and return stored response."""
 
@@ -785,19 +886,58 @@ def build_storage_key(prefix: str, category: str, extension: str) -> str:
     return f"{safe_prefix}/{category}/{uuid.uuid4()}.{extension}"
 
 
-async def fetch_binary(url: str, timeout: int = 300) -> bytes:
-    """Download binary content from a remote URL."""
+async def fetch_binary(
+    url: str,
+    timeout: int = 300,
+    max_bytes: int | None = FETCH_MAX_BYTES,
+    *,
+    allow_private: bool = ALLOW_PRIVATE_URL_FETCHES,
+) -> bytes:
+    """Download binary content from a remote URL with SSRF and size guards."""
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        return response.content
+    _validate_outbound_url(url, allow_private=allow_private)
+
+    if max_bytes is not None and max_bytes <= 0:
+        raise HTTPException(500, "FETCH_MAX_BYTES must be greater than zero.")
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+
+            if max_bytes is not None:
+                declared_size = response.headers.get("content-length")
+                if declared_size:
+                    try:
+                        declared_bytes = int(declared_size)
+                    except (TypeError, ValueError):
+                        declared_bytes = None
+                    if declared_bytes is not None and declared_bytes > max_bytes:
+                        raise HTTPException(
+                            413,
+                            f"Remote file is too large ({declared_size} bytes > {max_bytes}).",
+                        )
+
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in response.aiter_bytes():
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise HTTPException(
+                        413,
+                        f"Remote file exceeded {max_bytes} bytes while downloading.",
+                    )
+                chunks.append(chunk)
+            return b"".join(chunks)
 
 
 async def head_info(url: str) -> Tuple[int, str, int]:
     """Retrieve basic HTTP header information for a URL."""
 
-    async with httpx.AsyncClient(timeout=30) as c:
+    _validate_outbound_url(url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
+
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
         r = await c.head(url)
         if r.status_code >= 400:
             r = await c.get(url, headers={"Range": "bytes=0-1"})
@@ -865,7 +1005,7 @@ async def collect_video_delivery_debug(url: str) -> dict[str, Any]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             partial = await client.get(url, headers={"Range": "bytes=0-1023"})
         diagnostics["range_status"] = partial.status_code
         diagnostics["accept_ranges"] = partial.headers.get("accept-ranges", "")
@@ -936,7 +1076,18 @@ async def replicate_video_from_prompt(
         if not pred_id:
             raise HTTPException(500, "Replicate missing prediction id")
 
+        poll_started_at = time.monotonic()
         while True:
+            elapsed = time.monotonic() - poll_started_at
+            if elapsed > REPLICATE_POLL_TIMEOUT_SEC:
+                raise HTTPException(
+                    504,
+                    (
+                        "Replicate prediction timed out before completion "
+                        f"(prediction_id={pred_id})."
+                    ),
+                )
+
             getr = await client.get(
                 f"https://api.replicate.com/v1/predictions/{pred_id}",
                 headers=headers,
@@ -959,7 +1110,7 @@ async def replicate_video_from_prompt(
                 if isinstance(output, str):
                     return output
                 raise HTTPException(500, "Replicate missing output URL")
-            await asyncio.sleep(2)
+            await asyncio.sleep(REPLICATE_POLL_INTERVAL_SEC)
 
 
 async def generate_video_from_prompt(
@@ -1408,9 +1559,13 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
         SUPABASE_URL,
         SUPABASE_SERVICE_ROLE,
     )
+    intent["plan_tier"] = plan_tier
 
     if override:
-        model = normalize_video_model(override)
+        try:
+            model = resolve_explicit_video_model(override)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         if not is_model_allowed_for_plan(model, plan_tier):
             required = get_model_min_plan_tier(model).capitalize()
             raise HTTPException(
@@ -1489,7 +1644,10 @@ async def _resolve_job_model(
     )
 
     if override:
-        chosen = normalize_video_model(override)
+        try:
+            chosen = resolve_explicit_video_model(override)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         if not is_model_allowed_for_plan(chosen, plan_tier):
             required = get_model_min_plan_tier(chosen).capitalize()
             raise HTTPException(
@@ -1515,6 +1673,7 @@ async def _resolve_job_model(
                     "quality": normalized_quality,
                     "fps": fps,
                     "has_audio": has_audio,
+                    "plan_tier": plan_tier,
                     "user_context": (
                         to_model_dict(user_context) if user_context else None
                     ),
@@ -1554,6 +1713,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
     """Generate a video from a static image and text prompt."""
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
+    _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
     model, input_params, resolved = await _resolve_job_model(
         seconds=req.seconds,
@@ -1603,18 +1763,6 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         final_url = await supabase_upload(upload_ready_bytes, final_key, "video/mp4")
 
         try:
-            await insert_pet_video(
-                user_id=user_id,
-                video_url=final_url,
-                image_url=req.image_url,
-                script=None,
-                prompt=req.prompt,
-                voice_id=None,
-                resolution=resolved["resolution"],
-                duration=resolved["seconds"],
-                model=model,
-            )
-
             if ENABLE_FINAL_VIDEO_DEBUG:
                 diagnostics = await collect_video_delivery_debug(final_url)
                 if compression_debug is not None:
@@ -1631,6 +1779,18 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                         final_url=final_url,
                         details=diagnostics,
                     )
+
+            await insert_pet_video(
+                user_id=user_id,
+                video_url=final_url,
+                image_url=req.image_url,
+                script=None,
+                prompt=req.prompt,
+                voice_id=None,
+                resolution=resolved["resolution"],
+                duration=resolved["seconds"],
+                model=model,
+            )
         except HTTPException:
             await supabase_delete(final_key)
             raise
@@ -1640,7 +1800,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
 
         response_payload = {"video_url": video_url, "final_url": final_url}
         if normalized_request_id:
-            await update_job_request(
+            await update_job_request_best_effort(
                 normalized_request_id,
                 "succeeded",
                 response_payload=response_payload,
@@ -1649,7 +1809,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         return response_payload
     except HTTPException as exc:
         if normalized_request_id:
-            await update_job_request(
+            await update_job_request_best_effort(
                 normalized_request_id,
                 "failed",
                 error=str(exc.detail),
@@ -1664,7 +1824,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             user_id=user_id,
         )
         if normalized_request_id:
-            await update_job_request(
+            await update_job_request_best_effort(
                 normalized_request_id,
                 "failed",
                 error="Unexpected server error while processing this request_id.",
@@ -1679,6 +1839,7 @@ async def create_job_with_prompt_and_tts(
     """Generate a video with synchronized speech."""
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
+    _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
     model, input_params, resolved = await _resolve_job_model(
         seconds=req.seconds,
@@ -1760,18 +1921,6 @@ async def create_job_with_prompt_and_tts(
                 upload_ready_bytes, final_key, "video/mp4"
             )
 
-        await insert_pet_video(
-            user_id=user_id,
-            video_url=final_url,
-            image_url=req.image_url,
-            script=req.text,
-            prompt=req.prompt,
-            voice_id=req.voice_id,
-            resolution=resolved["resolution"],
-            duration=resolved["seconds"],
-            model=model,
-        )
-
         if ENABLE_FINAL_VIDEO_DEBUG and final_url:
             diagnostics = await collect_video_delivery_debug(final_url)
             if diagnostics.get("head_status", 0) >= 400:
@@ -1787,13 +1936,25 @@ async def create_job_with_prompt_and_tts(
                     details=diagnostics,
                 )
 
+        await insert_pet_video(
+            user_id=user_id,
+            video_url=final_url,
+            image_url=req.image_url,
+            script=req.text,
+            prompt=req.prompt,
+            voice_id=req.voice_id,
+            resolution=resolved["resolution"],
+            duration=resolved["seconds"],
+            model=model,
+        )
+
         response_payload = {
             "audio_url": audio_public_url,
             "video_url": video_url,
             "final_url": final_url,
         }
         if normalized_request_id:
-            await update_job_request(
+            await update_job_request_best_effort(
                 normalized_request_id,
                 "succeeded",
                 response_payload=response_payload,
@@ -1807,7 +1968,7 @@ async def create_job_with_prompt_and_tts(
         if audio_key:
             await supabase_delete(audio_key)
         if normalized_request_id:
-            await update_job_request(
+            await update_job_request_best_effort(
                 normalized_request_id,
                 "failed",
                 error=str(exc.detail),
@@ -1826,7 +1987,7 @@ async def create_job_with_prompt_and_tts(
         if audio_key:
             await supabase_delete(audio_key)
         if normalized_request_id:
-            await update_job_request(
+            await update_job_request_best_effort(
                 normalized_request_id,
                 "failed",
                 error="Unexpected server error while processing this request_id.",
@@ -1850,9 +2011,17 @@ async def debug_final_video(
 
     diagnostics = await collect_video_delivery_debug(req.url)
     try:
-        sample_bytes = await fetch_binary(req.url, timeout=60)
+        sample_bytes = await fetch_binary(
+            req.url,
+            timeout=60,
+            max_bytes=DEBUG_FETCH_MAX_BYTES,
+        )
     except httpx.HTTPError as exc:
         diagnostics["download_error"] = type(exc).__name__
+        return {"final_url": req.url, "diagnostics": diagnostics}
+    except HTTPException as exc:
+        diagnostics["download_error"] = f"HTTPException:{exc.status_code}"
+        diagnostics["download_error_detail"] = exc.detail
         return {"final_url": req.url, "diagnostics": diagnostics}
 
     diagnostics["probe"] = inspect_video_bytes(sample_bytes)

@@ -91,6 +91,11 @@ Optional:
 - `API_AUTH_TOKEN` (required only when auth enabled)
 - `IDEMPOTENCY_POLL_INTERVAL_SEC` (default `1`)
 - `IDEMPOTENCY_MAX_WAIT_SEC` (default `900`)
+- `REPLICATE_POLL_INTERVAL_SEC` (default `2`)
+- `REPLICATE_POLL_TIMEOUT_SEC` (default `900`)
+- `FETCH_MAX_BYTES` (default `52428800`, 50MB max download for remote binary fetches)
+- `DEBUG_FETCH_MAX_BYTES` (default `15728640`, 15MB max download for `/debug/final_video`)
+- `ALLOW_PRIVATE_URL_FETCHES` (default `false`; when `false`, outbound fetches reject non-public/private hosts)
 
 ---
 
@@ -226,6 +231,10 @@ Request:
 {"url": "https://example.com/file"}
 ```
 
+Security behavior:
+- URL must use `http` or `https`.
+- Host must resolve to public/routable IPs unless `ALLOW_PRIVATE_URL_FETCHES=true`.
+
 Response:
 ```json
 {"status": 200, "content_type": "image/jpeg", "bytes": 12345}
@@ -251,6 +260,7 @@ When `API_AUTH_ENABLED=false` (default), auth is bypassed.
 - Durations are snapped to nearest supported lower value where required (for model enums).
 - Resolution aliases are normalized (`768p`→`720p`, `1024p`→`1080p`) when needed.
 - `model_params` are filtered against model-specific allowlists.
+- `image_url` and debug URL inputs must be `http(s)` and publicly routable unless `ALLOW_PRIVATE_URL_FETCHES=true`.
 - `/jobs_prompt_only` rejects legacy `wan-video/wan-2.2-s2v` because it requires audio.
 
 ---

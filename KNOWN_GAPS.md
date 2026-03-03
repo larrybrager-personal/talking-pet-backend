@@ -12,7 +12,6 @@
 - Evaluate whether additional request correlation metadata (request IDs) should be surfaced in responses/logging.
 - Evaluate if plan-tier caching should be introduced for repeated profile lookups to reduce Supabase round-trips.
 - Consider consolidating quality normalization inside `model_routing` as a shared utility to remove duplicate alias logic between endpoint handlers and routing internals.
-- Add stricter URL validation for `image_url` and `HeadRequest.url` to reject malformed/unsafe schemes at request parsing time.
 - Add integration coverage for real ffmpeg recompression path (currently unit-tested with mocks only) to validate output compatibility across source codecs.
 - Consider adaptive bitrate/scale-down policy (in addition to CRF changes) for very long clips that still exceed storage targets after compression attempts.
 - Expose `VIDEO_UPLOAD_TARGET_BYTES` in deployment docs/env templates so operations can align backend limits with Supabase bucket/project limits.

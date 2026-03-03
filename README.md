@@ -151,7 +151,7 @@ Response includes:
 - `resolved_model_slug`
 - `resolved` (normalized `seconds`/`resolution`/`fps`/`quality`)
 - `resolved_defaults`
-- `resolved_meta`
+- `meta`
 - `plan_tier`
 
 ### `POST /jobs_prompt_only`
@@ -219,7 +219,7 @@ Response:
 |---|---|
 | `GET /health` | `{ ok: boolean }` |
 | `GET /models` | `{ supported_models: Record<string, ModelMeta>, default_model: string, routing_defaults: RoutingDefaults }` |
-| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string } }` |
+| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string }, resolved_defaults: object }` |
 | `POST /jobs_prompt_only` | `{ video_url: string, final_url: string }` |
 | `POST /jobs_prompt_tts` | `{ audio_url: string, video_url: string, final_url: string }` |
 | `POST /debug/head` | `{ status: number, content_type: string \| null, bytes: number \| null }` |

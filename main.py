@@ -17,10 +17,11 @@ import subprocess
 import tempfile
 import time
 import uuid
+from http import HTTPStatus
 from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Any, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -88,6 +89,7 @@ REPLICATE_POLL_INTERVAL_SEC = float(os.getenv("REPLICATE_POLL_INTERVAL_SEC", "2"
 REPLICATE_POLL_TIMEOUT_SEC = float(os.getenv("REPLICATE_POLL_TIMEOUT_SEC", "900"))
 FETCH_MAX_BYTES = int(os.getenv("FETCH_MAX_BYTES", "52428800"))
 DEBUG_FETCH_MAX_BYTES = int(os.getenv("DEBUG_FETCH_MAX_BYTES", "15728640"))
+MAX_REDIRECT_HOPS = int(os.getenv("MAX_REDIRECT_HOPS", "5"))
 ALLOW_PRIVATE_URL_FETCHES = os.getenv("ALLOW_PRIVATE_URL_FETCHES", "false").lower() in {
     "1",
     "true",
@@ -895,54 +897,80 @@ async def fetch_binary(
 ) -> bytes:
     """Download binary content from a remote URL with SSRF and size guards."""
 
-    _validate_outbound_url(url, allow_private=allow_private)
-
     if max_bytes is not None and max_bytes <= 0:
         raise HTTPException(500, "FETCH_MAX_BYTES must be greater than zero.")
 
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        async with client.stream("GET", url) as response:
-            response.raise_for_status()
+    current_url = url
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        for _ in range(MAX_REDIRECT_HOPS + 1):
+            _validate_outbound_url(current_url, allow_private=allow_private)
 
-            if max_bytes is not None:
-                declared_size = response.headers.get("content-length")
-                if declared_size:
-                    try:
-                        declared_bytes = int(declared_size)
-                    except (TypeError, ValueError):
-                        declared_bytes = None
-                    if declared_bytes is not None and declared_bytes > max_bytes:
+            async with client.stream("GET", current_url) as response:
+                if response.is_redirect:
+                    redirect_location = response.headers.get("location")
+                    if not redirect_location:
+                        raise HTTPException(
+                            502, "Redirect response missing Location header."
+                        )
+                    current_url = urljoin(str(response.url), redirect_location)
+                    continue
+
+                response.raise_for_status()
+
+                if max_bytes is not None:
+                    declared_size = response.headers.get("content-length")
+                    if declared_size:
+                        try:
+                            declared_bytes = int(declared_size)
+                        except (TypeError, ValueError):
+                            declared_bytes = None
+                        if declared_bytes is not None and declared_bytes > max_bytes:
+                            raise HTTPException(
+                                413,
+                                f"Remote file is too large ({declared_size} bytes > {max_bytes}).",
+                            )
+
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if max_bytes is not None and total > max_bytes:
                         raise HTTPException(
                             413,
-                            f"Remote file is too large ({declared_size} bytes > {max_bytes}).",
+                            f"Remote file exceeded {max_bytes} bytes while downloading.",
                         )
+                    chunks.append(chunk)
+                return b"".join(chunks)
 
-            chunks: list[bytes] = []
-            total = 0
-            async for chunk in response.aiter_bytes():
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if max_bytes is not None and total > max_bytes:
-                    raise HTTPException(
-                        413,
-                        f"Remote file exceeded {max_bytes} bytes while downloading.",
-                    )
-                chunks.append(chunk)
-            return b"".join(chunks)
+    raise HTTPException(400, f"Too many redirects (max {MAX_REDIRECT_HOPS}).")
 
 
 async def head_info(url: str) -> Tuple[int, str, int]:
     """Retrieve basic HTTP header information for a URL."""
 
-    _validate_outbound_url(url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
+    current_url = url
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as c:
+        for _ in range(MAX_REDIRECT_HOPS + 1):
+            _validate_outbound_url(current_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-        r = await c.head(url)
-        if r.status_code >= 400:
-            r = await c.get(url, headers={"Range": "bytes=0-1"})
-        size = int(r.headers.get("content-length", "0"))
-        return r.status_code, r.headers.get("content-type", ""), size
+            r = await c.head(current_url)
+            if r.is_redirect:
+                redirect_location = r.headers.get("location")
+                if not redirect_location:
+                    raise HTTPException(
+                        502, "Redirect response missing Location header."
+                    )
+                current_url = urljoin(str(r.url), redirect_location)
+                continue
+
+            if r.status_code >= HTTPStatus.BAD_REQUEST:
+                r = await c.get(current_url, headers={"Range": "bytes=0-1"})
+            size = int(r.headers.get("content-length", "0"))
+            return r.status_code, r.headers.get("content-type", ""), size
+
+    raise HTTPException(400, f"Too many redirects (max {MAX_REDIRECT_HOPS}).")
 
 
 def inspect_video_bytes(video_bytes: bytes) -> dict[str, Any]:

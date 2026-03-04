@@ -250,7 +250,9 @@ When `API_AUTH_ENABLED=true`, all endpoints require:
 Authorization: Bearer <API_AUTH_TOKEN>
 ```
 
-When `API_AUTH_ENABLED=false` (default), auth is bypassed.
+Exception: `GET /health` is always public so deployment health checks and frontend polling can run without an auth header.
+
+When `API_AUTH_ENABLED=false` (default), auth is bypassed globally.
 
 ---
 

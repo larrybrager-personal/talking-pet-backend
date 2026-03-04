@@ -34,3 +34,8 @@
 - Capture ffmpeg encoder capability telemetry (`ffmpeg -encoders`) at startup in debug mode to proactively flag missing `libx264` before first request.
 - Consider adding an environment knob to choose preferred fallback encoder ordering (`libx264`, `libx265`, `mpeg4`) based on deployment CPU budget and quality needs.
 - Add an integration test fixture with a runtime that intentionally lacks `libx264` to ensure the fallback path remains functional in CI.
+
+
+## 2026-03-04 Follow-ups
+- Consider adopting the new `{ error, detail, status }` envelope across any external proxy layers to keep backend/frontend error handling fully consistent end-to-end.
+- Consider adding contract tests for additional endpoint-specific `HTTPException` branches (e.g., Replicate and Supabase error mapping) to lock in new error envelope behavior.

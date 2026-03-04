@@ -111,3 +111,9 @@
 - Fixed video compression robustness for Render/runtime environments where `libx264` is unavailable by adding a fallback ffmpeg encode path (`mpeg4` + AAC) in `_compress_video_bytes`.
 - Preserved existing API behavior (`prepare_video_for_upload_with_debug`) while preventing unexpected compression-stage 500s that surfaced as upstream 502s.
 - Added unit tests for compression fallback success and all-encoders-fail handling in `tests/test_video_compression.py`.
+
+## 2026-03-04
+- Made `GET /health` publicly accessible regardless of `API_AUTH_ENABLED` so platform probes/frontend polling no longer require bearer headers.
+- Added global FastAPI exception handlers for `HTTPException` and `RequestValidationError` to return a consistent error envelope with `error`, `detail`, and `status` while preserving existing `detail` semantics.
+- Updated auth documentation in `README.md` to explicitly call out the `/health` auth exception.
+- Added regression tests for public health behavior under auth-enabled mode and for error envelope fields on both auth and validation failures.

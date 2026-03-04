@@ -25,7 +25,9 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:  # Pydantic v2
@@ -114,6 +116,46 @@ logger = logging.getLogger("talking_pet_backend")
 
 # Backward-compatible re-exports used by tests/importers.
 _ROUTING_HELPERS_COMPAT = (normalize_video_model, get_default_video_model)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
+    """Return a stable error envelope while preserving FastAPI-compatible detail."""
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail if isinstance(exc.detail, str) else "Request failed.",
+            "detail": exc.detail,
+            "status": exc.status_code,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    _: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Surface a friendly summary and preserve full validation detail payload."""
+
+    errors = exc.errors()
+    summary = "Validation error."
+    if errors:
+        first = errors[0]
+        message = first.get("msg", "Validation error.")
+        location = ".".join(
+            str(part) for part in first.get("loc", []) if part != "body"
+        )
+        summary = f"{location}: {message}" if location else str(message)
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": summary,
+            "detail": errors,
+            "status": 422,
+        },
+    )
 
 
 def _log_unexpected_job_error(
@@ -1528,7 +1570,7 @@ def prepare_video_for_upload(video_bytes: bytes) -> bytes:
 
 # ===== Routes =====
 @app.get("/health")
-async def health(_: None = Depends(require_auth)):
+async def health():
     """Simple health check used by deployment platforms."""
     return {"ok": True}
 

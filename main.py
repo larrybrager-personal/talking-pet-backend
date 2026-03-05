@@ -29,6 +29,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:  # Pydantic v2
     from pydantic import ConfigDict
@@ -129,6 +130,18 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
             "detail": exc.detail,
             "status": exc.status_code,
         },
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def starlette_http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    """Apply the same envelope for Starlette-raised HTTP errors (e.g. 404/405)."""
+
+    return await http_exception_handler(
+        request, HTTPException(exc.status_code, exc.detail, headers=exc.headers)
     )
 
 

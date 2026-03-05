@@ -22,3 +22,4 @@
 
 - Add endpoint-level tests for `/jobs_prompt_tts` failed-idempotency branch to verify deterministic 409 response and no rerun on stored failures.
 - Consider adding stale `processing` recovery (heartbeat/lease ownership) for crashed owner requests so duplicates can eventually fail fast with clearer remediation.
+- Add a dedicated regression test ensuring Starlette `HTTPException` subclasses (including middleware/route-construction edge cases beyond 404/405) always flow through the stable error envelope handler.

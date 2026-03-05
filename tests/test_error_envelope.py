@@ -51,6 +51,34 @@ class ErrorEnvelopeAndHealthTests(unittest.TestCase):
         self.assertEqual(payload.get("status"), 401)
         self.assertEqual(payload["detail"], "Missing Authorization header")
 
+    def test_unknown_route_uses_stable_error_envelope(self):
+        os.environ["API_AUTH_ENABLED"] = "false"
+        importlib.reload(main)
+
+        client = TestClient(main.app)
+        response = client.get("/does-not-exist")
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("error", payload)
+        self.assertIn("detail", payload)
+        self.assertEqual(payload.get("status"), 404)
+        self.assertEqual(payload["detail"], "Not Found")
+
+    def test_method_not_allowed_uses_stable_error_envelope(self):
+        os.environ["API_AUTH_ENABLED"] = "false"
+        importlib.reload(main)
+
+        client = TestClient(main.app)
+        response = client.post("/health")
+
+        payload = response.json()
+        self.assertEqual(response.status_code, 405)
+        self.assertIn("error", payload)
+        self.assertIn("detail", payload)
+        self.assertEqual(payload.get("status"), 405)
+        self.assertEqual(payload["detail"], "Method Not Allowed")
+
     def test_resolve_model_validation_error_includes_error_and_detail(self):
         os.environ["API_AUTH_ENABLED"] = "false"
         importlib.reload(main)

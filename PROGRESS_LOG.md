@@ -117,3 +117,8 @@
 - Added global FastAPI exception handlers for `HTTPException` and `RequestValidationError` to return a consistent error envelope with `error`, `detail`, and `status` while preserving existing `detail` semantics.
 - Updated auth documentation in `README.md` to explicitly call out the `/health` auth exception.
 - Added regression tests for public health behavior under auth-enabled mode and for error envelope fields on both auth and validation failures.
+
+## 2026-03-04
+- Added a Starlette HTTP exception handler so router/framework errors (including unknown routes and method mismatches) now use the same stable `{error, detail, status}` envelope as FastAPI-raised HTTP errors.
+- Extended error envelope regression tests to cover `404 Not Found` and `405 Method Not Allowed` paths triggered by Starlette routing.
+- Recorded follow-up coverage gap for Starlette HTTPException subclass handling outside the primary route mismatch scenarios.

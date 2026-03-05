@@ -111,3 +111,18 @@
 - Fixed video compression robustness for Render/runtime environments where `libx264` is unavailable by adding a fallback ffmpeg encode path (`mpeg4` + AAC) in `_compress_video_bytes`.
 - Preserved existing API behavior (`prepare_video_for_upload_with_debug`) while preventing unexpected compression-stage 500s that surfaced as upstream 502s.
 - Added unit tests for compression fallback success and all-encoders-fail handling in `tests/test_video_compression.py`.
+
+## 2026-03-04
+- Made `GET /health` publicly accessible regardless of `API_AUTH_ENABLED` so platform probes/frontend polling no longer require bearer headers.
+- Added global FastAPI exception handlers for `HTTPException` and `RequestValidationError` to return a consistent error envelope with `error`, `detail`, and `status` while preserving existing `detail` semantics.
+- Updated auth documentation in `README.md` to explicitly call out the `/health` auth exception.
+- Added regression tests for public health behavior under auth-enabled mode and for error envelope fields on both auth and validation failures.
+
+## 2026-03-04
+- Added a Starlette HTTP exception handler so router/framework errors (including unknown routes and method mismatches) now use the same stable `{error, detail, status}` envelope as FastAPI-raised HTTP errors.
+- Extended error envelope regression tests to cover `404 Not Found` and `405 Method Not Allowed` paths triggered by Starlette routing.
+- Recorded follow-up coverage gap for Starlette HTTPException subclass handling outside the primary route mismatch scenarios.
+
+## 2026-03-05
+- Preserved Starlette-provided HTTP headers in the stable error envelope path by forwarding `exc.headers` through the FastAPI/Starlette exception handlers.
+- Added regression coverage to assert `Allow` header propagation on `405 Method Not Allowed` responses while keeping `{error, detail, status}` response body intact.

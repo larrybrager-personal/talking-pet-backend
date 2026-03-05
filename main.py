@@ -130,6 +130,7 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
             "detail": exc.detail,
             "status": exc.status_code,
         },
+        headers=exc.headers,
     )
 
 
@@ -140,7 +141,7 @@ async def starlette_http_exception_handler(
     """Apply the same envelope for Starlette-raised HTTP errors (e.g. 404/405)."""
 
     return await http_exception_handler(
-        request, HTTPException(exc.status_code, exc.detail)
+        request, HTTPException(exc.status_code, exc.detail, headers=exc.headers)
     )
 
 

@@ -78,6 +78,7 @@ class ErrorEnvelopeAndHealthTests(unittest.TestCase):
         self.assertIn("detail", payload)
         self.assertEqual(payload.get("status"), 405)
         self.assertEqual(payload["detail"], "Method Not Allowed")
+        self.assertEqual(response.headers.get("allow"), "GET")
 
     def test_resolve_model_validation_error_includes_error_and_detail(self):
         os.environ["API_AUTH_ENABLED"] = "false"

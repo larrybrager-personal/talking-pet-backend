@@ -122,3 +122,7 @@
 - Added a Starlette HTTP exception handler so router/framework errors (including unknown routes and method mismatches) now use the same stable `{error, detail, status}` envelope as FastAPI-raised HTTP errors.
 - Extended error envelope regression tests to cover `404 Not Found` and `405 Method Not Allowed` paths triggered by Starlette routing.
 - Recorded follow-up coverage gap for Starlette HTTPException subclass handling outside the primary route mismatch scenarios.
+
+## 2026-03-05
+- Preserved Starlette-provided HTTP headers in the stable error envelope path by forwarding `exc.headers` through the FastAPI/Starlette exception handlers.
+- Added regression coverage to assert `Allow` header propagation on `405 Method Not Allowed` responses while keeping `{error, detail, status}` response body intact.

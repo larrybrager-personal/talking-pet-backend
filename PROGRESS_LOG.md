@@ -119,3 +119,7 @@
 - Added migration `20260314_pet_videos_canonical_final_url.sql` to add/backfill canonical playback columns for existing rows.
 - Expanded endpoint contract tests for job response shapes, alias compatibility, backward-compatible snake_case inputs, and canonical URL persistence semantics.
 - Updated frontend-facing docs (`README.md`, `MODEL_ROUTING_FRONTEND_GUIDE.md`) with explicit alias acceptance and canonical playback semantics.
+
+## 2026-03-14
+- Hardened migration `20260314_pet_videos_canonical_final_url.sql` for fresh/ephemeral databases by wrapping `pet_videos` backfill updates and index creation in a `to_regclass('public.pet_videos')` guard inside a DO block.
+- Preserved forward-only idempotency so canonical column adds still use `alter table if exists ... add column if not exists` while skipping unsafe statements when the table is absent.

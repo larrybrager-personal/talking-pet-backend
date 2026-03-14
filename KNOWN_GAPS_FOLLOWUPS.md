@@ -39,3 +39,7 @@
 - Consider adding typed FastAPI `response_model` contracts for `/jobs_prompt_only` and `/jobs_prompt_tts` to enforce stable OpenAPI schema generation (currently guaranteed by tests and implementation only).
 - Add database-level constraints once rollout is complete: consider `not null` on `pet_videos.final_url` and optional check ensuring `video_url = final_url` for new rows.
 - Add a history-read endpoint regression test that validates consumers prefer `final_url` when both `final_url` and `provider_video_url` exist.
+
+## 2026-03-14 Migration Guard Follow-ups
+- Add an integration test harness that runs SQL migrations against an empty Postgres schema to catch missing-table assumptions before deployment.
+- If `public.pet_videos` becomes guaranteed in baseline schema later, consider simplifying this migration by moving canonical column creation/backfill into the table-create migration chain.

@@ -669,7 +669,9 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
     def test_jobs_prompt_only_response_contains_video_and_final_url(self):
         with (
             patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
-            patch("main.generate_video_from_prompt", new_callable=AsyncMock) as mock_generate,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch(
                 "main.prepare_video_for_upload_with_debug",
@@ -678,7 +680,9 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
             patch("main.build_storage_key", return_value="videos/final.mp4"),
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
             patch("main.insert_pet_video", new_callable=AsyncMock),
-            patch("main.collect_video_delivery_debug", new_callable=AsyncMock) as mock_debug,
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
         ):
             mock_resolve.return_value = (
                 "bytedance/seedance-1-pro-fast",
@@ -705,17 +709,27 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
         with (
             patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
             patch("main.elevenlabs_tts_bytes", new_callable=AsyncMock) as mock_tts,
-            patch("main.build_storage_key", side_effect=["audio/file.mp3", "videos/final.mp4"]),
+            patch(
+                "main.build_storage_key",
+                side_effect=["audio/file.mp3", "videos/final.mp4"],
+            ),
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
-            patch("main.get_model_config", return_value={"capabilities": {"supportsAudioIn": True}}),
-            patch("main.generate_video_from_prompt", new_callable=AsyncMock) as mock_generate,
+            patch(
+                "main.get_model_config",
+                return_value={"capabilities": {"supportsAudioIn": True}},
+            ),
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch(
                 "main.prepare_video_for_upload_with_debug",
                 return_value=(b"upload-ready", {"meets_target": True}),
             ),
             patch("main.insert_pet_video", new_callable=AsyncMock),
-            patch("main.collect_video_delivery_debug", new_callable=AsyncMock) as mock_debug,
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
         ):
             mock_resolve.return_value = (
                 "wan-video/wan2.6-i2v-flash",
@@ -747,6 +761,143 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
         self.assertEqual(payload["audio_url"], "https://supabase/audio.mp3")
         self.assertEqual(payload["video_url"], "https://provider/video.mp4")
         self.assertEqual(payload["final_url"], "https://supabase/final.mp4")
+
+    def test_jobs_prompt_only_accepts_alias_payload_fields(self):
+        with (
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed", {"meets_target": True}),
+            ),
+            patch("main.build_storage_key", return_value="videos/final.mp4"),
+            patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch("main.insert_pet_video", new_callable=AsyncMock),
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
+        ):
+            mock_resolve.return_value = (
+                "bytedance/seedance-1-pro-fast",
+                {},
+                {"seconds": 6, "resolution": "480p", "fps": None},
+            )
+            mock_generate.return_value = "https://provider/video.mp4"
+            mock_fetch.return_value = b"video-bytes"
+            mock_upload.return_value = "https://supabase/final.mp4"
+            mock_debug.return_value = {"head_status": 200, "content_length": 100}
+
+            response = self.client.post(
+                "/jobs_prompt_only",
+                json={
+                    "imageUrl": "https://example.com/pet.jpg",
+                    "prompt": "hello",
+                    "modelOverride": "bytedance/seedance-1-pro-fast",
+                    "modelParams": {"fps": 24},
+                    "userContext": {
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "planTier": "creator",
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_jobs_prompt_tts_accepts_alias_payload_fields(self):
+        with (
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch("main.elevenlabs_tts_bytes", new_callable=AsyncMock) as mock_tts,
+            patch(
+                "main.build_storage_key",
+                side_effect=["audio/file.mp3", "videos/final.mp4"],
+            ),
+            patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch(
+                "main.get_model_config",
+                return_value={"capabilities": {"supportsAudioIn": True}},
+            ),
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"upload-ready", {"meets_target": True}),
+            ),
+            patch("main.insert_pet_video", new_callable=AsyncMock),
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
+        ):
+            mock_resolve.return_value = (
+                "wan-video/wan2.6-i2v-flash",
+                {},
+                {"seconds": 5, "resolution": "720p", "fps": 24},
+            )
+            mock_tts.return_value = b"mp3"
+            mock_upload.side_effect = [
+                "https://supabase/audio.mp3",
+                "https://supabase/final.mp4",
+            ]
+            mock_generate.return_value = "https://provider/video.mp4"
+            mock_fetch.return_value = b"video"
+            mock_debug.return_value = {"head_status": 200, "content_length": 100}
+
+            response = self.client.post(
+                "/jobs_prompt_tts",
+                json={
+                    "imageUrl": "https://example.com/pet.jpg",
+                    "prompt": "hello",
+                    "text": "hi",
+                    "voiceId": "voice",
+                    "selectedOverrideModel": "wan-video/wan2.6-i2v-flash",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_jobs_prompt_only_persists_final_url_as_canonical_video_reference(self):
+        with (
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed", {"meets_target": True}),
+            ),
+            patch("main.build_storage_key", return_value="videos/final.mp4"),
+            patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch("main.insert_pet_video", new_callable=AsyncMock) as mock_insert,
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
+        ):
+            mock_resolve.return_value = (
+                "bytedance/seedance-1-pro-fast",
+                {},
+                {"seconds": 6, "resolution": "480p", "fps": None},
+            )
+            mock_generate.return_value = "https://provider/video.mp4"
+            mock_fetch.return_value = b"video-bytes"
+            mock_upload.return_value = "https://supabase/final.mp4"
+            mock_debug.return_value = {"head_status": 200, "content_length": 100}
+
+            response = self.client.post(
+                "/jobs_prompt_only",
+                json={"image_url": "https://example.com/pet.jpg", "prompt": "hello"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        insert_kwargs = mock_insert.await_args.kwargs
+        self.assertEqual(insert_kwargs["final_url"], "https://supabase/final.mp4")
+        self.assertEqual(
+            insert_kwargs["provider_video_url"], "https://provider/video.mp4"
+        )
 
     def test_models_capability_flags_are_booleans_for_semantic_contract(self):
         response = self.client.get("/models")

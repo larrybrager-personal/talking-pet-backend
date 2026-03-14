@@ -155,7 +155,7 @@ Response includes:
 - `plan_tier`
 
 ### `POST /jobs_prompt_only`
-Request (example):
+Request (snake_case example):
 ```json
 {
   "image_url": "https://example.com/pet.jpg",
@@ -181,7 +181,7 @@ Response:
 ```
 
 ### `POST /jobs_prompt_tts`
-Request (example):
+Request (snake_case example):
 ```json
 {
   "image_url": "https://example.com/pet.jpg",
@@ -208,10 +208,29 @@ Response:
 }
 ```
 
-`final_url` behavior:
-- `/jobs_prompt_only`: always a backend-uploaded Supabase artifact.
+
+Accepted request field aliases on job endpoints (snake_case and camelCase are both accepted):
+
+| Canonical field | Also accepted aliases |
+|---|---|
+| `image_url` | `imageUrl` |
+| `voice_id` (`/jobs_prompt_tts`) | `voiceId` |
+| `model_override` | `modelOverride`, `selectedOverrideModel` |
+| `model_params` | `modelParams` |
+| `user_context` | `userContext` |
+| `user_context.plan_tier` | `userContext.planTier` |
+| `request_id` | `requestId` |
+
+
+`final_url` behavior (canonical playback contract):
+- `/jobs_prompt_only`: always a backend-uploaded Supabase artifact; this is the playback URL frontend clients should persist/use.
 - `/jobs_prompt_tts` + `supportsAudioIn=true`: backend re-uploads the generated MP4 as `final_url` (no mux).
 - `/jobs_prompt_tts` + `supportsAudioIn=false`: backend creates a new muxed MP4 artifact and returns that as `final_url`.
+
+Persistence semantics (`pet_videos`):
+- `final_url`: canonical playback URL (matches API `final_url`).
+- `provider_video_url`: raw provider output URL when applicable.
+- `video_url`: backward-compatible mirror of `final_url`.
 
 ### Response-shape table (frontend typing)
 
@@ -315,3 +334,5 @@ pytest -q
 - Invalid `request_id`: backend ignores idempotency and processes normally.
 
 Backed by Supabase table `public.job_requests`; see migration SQL: `migrations/20260227_create_job_requests.sql`.
+
+Canonical URL migration for metadata rows: `migrations/20260314_pet_videos_canonical_final_url.sql` adds/backfills `final_url` and `provider_video_url` for durable frontend playback/history references.

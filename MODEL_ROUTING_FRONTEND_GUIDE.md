@@ -98,10 +98,32 @@ Treat `resolved` values from `POST /resolve_model` as source-of-truth preview va
 | `POST /debug/head` | `{ status: number, content_type: string \| null, bytes: number \| null }` |
 | `POST /debug/final_video` | `{ final_url: string, diagnostics: object }` |
 
-`final_url` semantics:
-- `/jobs_prompt_only`: always a backend-uploaded Supabase artifact.
+`final_url` semantics (canonical playback contract):
+- `/jobs_prompt_only`: always a backend-uploaded Supabase artifact; frontend playback/history should treat this as the canonical URL.
 - `/jobs_prompt_tts` + `supportsAudioIn=true`: backend re-uploads generated MP4 as `final_url` (no mux step).
 - `/jobs_prompt_tts` + `supportsAudioIn=false`: backend muxes video + TTS audio and uploads a new MP4 as `final_url`.
+
+Persistence semantics (`pet_videos` metadata):
+- `final_url`: canonical playback URL.
+- `provider_video_url`: raw model/provider output URL.
+- `video_url`: retained as a backward-compatible mirror of `final_url`.
+
+
+## 6.2) Job endpoint request alias compatibility
+
+Job endpoints accept both snake_case and camelCase payloads for backward compatibility:
+
+| Canonical field | Also accepted aliases |
+|---|---|
+| `image_url` | `imageUrl` |
+| `voice_id` (`/jobs_prompt_tts`) | `voiceId` |
+| `model_override` | `modelOverride`, `selectedOverrideModel` |
+| `model_params` | `modelParams` |
+| `user_context` | `userContext` |
+| `user_context.plan_tier` | `userContext.planTier` |
+| `request_id` | `requestId` |
+
+Prefer snake_case in new code, but both forms are contractually supported.
 
 ## 7) Important UX notes
 - Keep prompts concise and concrete.

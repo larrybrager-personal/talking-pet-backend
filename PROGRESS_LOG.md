@@ -111,3 +111,11 @@
 - Fixed video compression robustness for Render/runtime environments where `libx264` is unavailable by adding a fallback ffmpeg encode path (`mpeg4` + AAC) in `_compress_video_bytes`.
 - Preserved existing API behavior (`prepare_video_for_upload_with_debug`) while preventing unexpected compression-stage 500s that surfaced as upstream 502s.
 - Added unit tests for compression fallback success and all-encoders-fail handling in `tests/test_video_compression.py`.
+
+## 2026-03-14
+- Unified job endpoint request parsing with `RequestModel` alias compatibility used by `/resolve_model` so `/jobs_prompt_only` and `/jobs_prompt_tts` now accept both snake_case and camelCase payload variants.
+- Added explicit compatibility mapping for legacy `selectedOverrideModel` on job endpoints while preserving snake_case compatibility.
+- Updated metadata persistence contract so `insert_pet_video` stores `final_url` as canonical playback URL and tracks raw provider output in `provider_video_url`; `video_url` remains a backward-compatible mirror of `final_url`.
+- Added migration `20260314_pet_videos_canonical_final_url.sql` to add/backfill canonical playback columns for existing rows.
+- Expanded endpoint contract tests for job response shapes, alias compatibility, backward-compatible snake_case inputs, and canonical URL persistence semantics.
+- Updated frontend-facing docs (`README.md`, `MODEL_ROUTING_FRONTEND_GUIDE.md`) with explicit alias acceptance and canonical playback semantics.

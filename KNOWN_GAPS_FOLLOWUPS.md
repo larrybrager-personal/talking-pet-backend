@@ -34,3 +34,8 @@
 - Capture ffmpeg encoder capability telemetry (`ffmpeg -encoders`) at startup in debug mode to proactively flag missing `libx264` before first request.
 - Consider adding an environment knob to choose preferred fallback encoder ordering (`libx264`, `libx265`, `mpeg4`) based on deployment CPU budget and quality needs.
 - Add an integration test fixture with a runtime that intentionally lacks `libx264` to ensure the fallback path remains functional in CI.
+
+## 2026-03-14 Follow-ups
+- Consider adding typed FastAPI `response_model` contracts for `/jobs_prompt_only` and `/jobs_prompt_tts` to enforce stable OpenAPI schema generation (currently guaranteed by tests and implementation only).
+- Add database-level constraints once rollout is complete: consider `not null` on `pet_videos.final_url` and optional check ensuring `video_url = final_url` for new rows.
+- Add a history-read endpoint regression test that validates consumers prefer `final_url` when both `final_url` and `provider_video_url` exist.

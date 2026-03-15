@@ -1752,13 +1752,18 @@ async def quota_summary(req: QuotaSummaryRequest, _: None = Depends(require_auth
     if not req.user_context or not req.user_context.id:
         raise HTTPException(400, "user_context.id is required")
 
+    try:
+        user_id = str(uuid.UUID(req.user_context.id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, "user_context.id must be a valid UUID") from exc
+
     plan_tier = await resolve_plan_tier(
         to_model_dict(req.user_context),
         SUPABASE_URL,
         SUPABASE_SERVICE_ROLE,
     )
     usage = await get_used_credits_for_period(
-        user_id=req.user_context.id,
+        user_id=user_id,
         plan_tier=plan_tier,
     )
     return {
@@ -1860,7 +1865,7 @@ async def _resolve_job_model(
     model: str | None,
     model_override: str | None,
     model_params: dict[str, Any] | None,
-) -> tuple[str, dict[str, Any], dict[str, Any]]:
+) -> tuple[str, dict[str, Any], dict[str, Any], str]:
     normalized_quality = normalize_quality(quality)
     override = model_override or model
     plan_tier = await resolve_plan_tier(
@@ -1931,7 +1936,7 @@ async def _resolve_job_model(
     if resolved.get("fps") is not None and "fps" in config.get("param_mapping", {}):
         params["fps"] = resolved["fps"]
 
-    return chosen, params, resolved
+    return chosen, params, resolved, plan_tier
 
 
 @app.post("/jobs_prompt_only")
@@ -1941,7 +1946,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
     user_id = req.user_context.id if req.user_context else None
     _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
-    model, input_params, resolved = await _resolve_job_model(
+    model, input_params, resolved, plan_tier = await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
         quality=req.quality,
@@ -1953,16 +1958,6 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         model_params=req.model_params,
     )
     prefix = resolve_user_storage_prefix(req.user_context)
-    plan_tier = await resolve_plan_tier(
-        to_model_dict(req.user_context) if req.user_context else None,
-        SUPABASE_URL,
-        SUPABASE_SERVICE_ROLE,
-    )
-    quota_usage = await enforce_generation_quota(
-        user_context=req.user_context,
-        model=model,
-        plan_tier=plan_tier,
-    )
 
     if normalized_request_id:
         owner = await create_job_request_processing(
@@ -1980,6 +1975,12 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                 normalized_request_id,
             )
             return existing_response
+
+    quota_usage = await enforce_generation_quota(
+        user_context=req.user_context,
+        model=model,
+        plan_tier=plan_tier,
+    )
 
     try:
         video_url = await generate_video_from_prompt(
@@ -2086,7 +2087,7 @@ async def create_job_with_prompt_and_tts(
     user_id = req.user_context.id if req.user_context else None
     _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
-    model, input_params, resolved = await _resolve_job_model(
+    model, input_params, resolved, plan_tier = await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
         quality=req.quality,
@@ -2098,16 +2099,6 @@ async def create_job_with_prompt_and_tts(
         model_params=req.model_params,
     )
     prefix = resolve_user_storage_prefix(req.user_context)
-    plan_tier = await resolve_plan_tier(
-        to_model_dict(req.user_context) if req.user_context else None,
-        SUPABASE_URL,
-        SUPABASE_SERVICE_ROLE,
-    )
-    quota_usage = await enforce_generation_quota(
-        user_context=req.user_context,
-        model=model,
-        plan_tier=plan_tier,
-    )
 
     if normalized_request_id:
         owner = await create_job_request_processing(
@@ -2125,6 +2116,12 @@ async def create_job_with_prompt_and_tts(
                 normalized_request_id,
             )
             return existing_response
+
+    quota_usage = await enforce_generation_quota(
+        user_context=req.user_context,
+        model=model,
+        plan_tier=plan_tier,
+    )
 
     final_key: str | None = None
     audio_key: str | None = None

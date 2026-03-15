@@ -113,6 +113,20 @@ class QuotaSummaryEndpointTestCase(unittest.TestCase):
             plan_tier='creator',
         )
 
+    def test_rejects_invalid_user_uuid(self):
+        response = self.client.post(
+            '/quota_summary',
+            json={
+                'user_context': {
+                    'id': 'not-a-uuid',
+                    'plan_tier': 'creator',
+                }
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['detail'], 'user_context.id must be a valid UUID')
+
 
 if __name__ == '__main__':
     unittest.main()

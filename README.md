@@ -298,10 +298,77 @@ This ensures `setuptools` (and `pkg_resources`) is present for `imageio-ffmpeg` 
 - Build: `pip install -r requirements.txt`
 - Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 
+### Database migrations
+
+This repo keeps database changes as ordered SQL files in `migrations/`.
+
+A GitHub Actions workflow is included at `.github/workflows/db-migrations.yml` and uses `scripts/apply_migrations.sh` to apply them with `psql`.
+
+Safety guardrails built into the runner:
+- Migrations are applied in filename order.
+- Applied migrations are tracked in `public.schema_migrations`.
+- Each migration records a SHA-256 checksum.
+- If an already-applied migration file is edited later, the runner fails instead of silently re-running modified SQL.
+- Workflow concurrency is serialized per target environment to avoid overlapping runs.
+- Automatic runs are gated behind a repo variable so they do not turn on by accident.
+
+#### Required GitHub secret
+
+Set this repository or environment secret:
+
+- `MIGRATION_DATABASE_URL`: PostgreSQL connection string for the target database.
+  - For Supabase, use a direct Postgres connection string for the project database.
+  - Recommended: include SSL in the URL (for example `?sslmode=require`) if your connection string does not already enforce it.
+  - Use a role with permission to alter schema objects in `public`.
+
+#### Optional GitHub variable for auto-runs
+
+Set this repository variable only if you want migrations to run automatically:
+
+- `ENABLE_AUTO_DB_MIGRATIONS=true`
+
+If unset (or not `true`), automatic push/release-triggered runs are skipped and only manual runs are allowed.
+
+#### Manual run from GitHub Actions
+
+1. Open **GitHub → Actions → DB Migrations**.
+2. Click **Run workflow**.
+3. Choose:
+   - `target_env` (for example `production`)
+   - `migrations_dir` (normally `migrations`)
+   - `dry_run=true` if you want to verify the plan without executing SQL
+4. Run again with `dry_run=false` to actually apply migrations.
+
+#### Automatic run behavior
+
+When `ENABLE_AUTO_DB_MIGRATIONS=true` and `MIGRATION_DATABASE_URL` is set:
+- A push to `main` that changes migration/workflow files triggers the migration workflow.
+- A published GitHub release also triggers the workflow.
+- Release-triggered runs are guarded to only proceed when the release targets `main`.
+
+This is designed to fit a Render-style deployment flow where production deploys normally come from `main`, while still letting Larry run migrations manually at any time.
+
+#### Local/manual shell usage
+
+If you want to apply migrations outside GitHub Actions:
+
+```bash
+export DATABASE_URL='postgresql://...'
+bash scripts/apply_migrations.sh
+```
+
+Or do a dry run:
+
+```bash
+export DATABASE_URL='postgresql://...'
+DRY_RUN=true bash scripts/apply_migrations.sh
+```
+
 Security reminders:
 - Never expose `SUPABASE_SERVICE_ROLE` in clients.
 - Restrict `ALLOWED_ORIGIN` in production.
 - Keep `API_AUTH_TOKEN` server-side only.
+- Keep `MIGRATION_DATABASE_URL` only in GitHub/hosting secrets, never in source control.
 
 ---
 

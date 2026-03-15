@@ -20,7 +20,7 @@ import uuid
 from http import HTTPStatus
 from functools import lru_cache
 from datetime import datetime, timezone
-from typing import Any, Tuple
+from typing import Any, ClassVar, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -201,6 +201,8 @@ def _validate_outbound_url(url: str, *, allow_private: bool = False) -> None:
 class RequestModel(BaseModel):
     """Pydantic v1/v2-compatible request base model config."""
 
+    ALIAS_COMPAT_MAP: ClassVar[dict[str, tuple[str, ...]]] = {}
+
     if ConfigDict is not None:
         model_config = ConfigDict(populate_by_name=True, extra="ignore")
     else:
@@ -208,6 +210,17 @@ class RequestModel(BaseModel):
         class Config:
             allow_population_by_field_name = True
             extra = "ignore"
+
+    def __init__(self, **data: Any):
+        compat_map = getattr(self.__class__, "ALIAS_COMPAT_MAP", {}) or {}
+        for field_name, alias_candidates in compat_map.items():
+            if field_name in data:
+                continue
+            for alias_key in alias_candidates:
+                if alias_key in data:
+                    data[field_name] = data[alias_key]
+                    break
+        super().__init__(**data)
 
 
 # ===== Auth =====
@@ -895,7 +908,8 @@ def _normalize_request_id(request_id: str | None) -> str | None:
 async def insert_pet_video(
     *,
     user_id: str | None,
-    video_url: str,
+    final_url: str,
+    provider_video_url: str | None,
     image_url: str,
     script: str | None,
     prompt: str,
@@ -907,9 +921,9 @@ async def insert_pet_video(
 ) -> None:
     """Persist a generated pet video record via Supabase PostgREST.
 
-    Supabase's current schema omits the previous ``storage_key`` column, so we
-    only persist the public ``video_url`` alongside the other metadata fields,
-    including the resolved Replicate ``model`` used for generation.
+    ``final_url`` is the canonical playback artifact returned to frontend
+    clients. ``video_url`` is retained as a backward-compatible mirror of
+    ``final_url`` while ``provider_video_url`` tracks the raw model output URL.
     """
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
@@ -926,7 +940,9 @@ async def insert_pet_video(
     }
     payload = {
         "user_id": user_id,
-        "video_url": video_url,
+        "video_url": final_url,
+        "final_url": final_url,
+        "provider_video_url": provider_video_url,
         "image_url": image_url,
         "script": script,
         "prompt": prompt,
@@ -1880,7 +1896,8 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
 
             await insert_pet_video(
                 user_id=user_id,
-                video_url=final_url,
+                final_url=final_url,
+                provider_video_url=video_url,
                 image_url=req.image_url,
                 script=None,
                 prompt=req.prompt,
@@ -2036,7 +2053,8 @@ async def create_job_with_prompt_and_tts(
 
         await insert_pet_video(
             user_id=user_id,
-            video_url=final_url,
+            final_url=final_url,
+            provider_video_url=video_url,
             image_url=req.image_url,
             script=req.text,
             prompt=req.prompt,

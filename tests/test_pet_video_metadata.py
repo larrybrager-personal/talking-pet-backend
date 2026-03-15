@@ -25,7 +25,8 @@ class InsertPetVideoHelperTest(unittest.IsolatedAsyncioTestCase):
 
             await main.insert_pet_video(
                 user_id="user-123",
-                video_url="https://public.final/video.mp4",
+                final_url="https://public.final/video.mp4",
+                provider_video_url="https://provider/video.mp4",
                 image_url="https://example.com/pet.jpg",
                 script="Hello!",
                 prompt="Wave hello",
@@ -52,6 +53,8 @@ class InsertPetVideoHelperTest(unittest.IsolatedAsyncioTestCase):
             {
                 "user_id": "user-123",
                 "video_url": "https://public.final/video.mp4",
+                "final_url": "https://public.final/video.mp4",
+                "provider_video_url": "https://provider/video.mp4",
                 "image_url": "https://example.com/pet.jpg",
                 "script": "Hello!",
                 "prompt": "Wave hello",
@@ -106,7 +109,8 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
             insert_kwargs,
             {
                 "user_id": "00000000-0000-0000-0000-000000000000",
-                "video_url": "https://public.final/video.mp4",
+                "final_url": "https://public.final/video.mp4",
+                "provider_video_url": "https://model/video.mp4",
                 "image_url": "https://example.com/pet.jpg",
                 "script": None,
                 "prompt": "Say hi",
@@ -180,7 +184,8 @@ class HandlerMetadataTest(unittest.IsolatedAsyncioTestCase):
             insert_kwargs,
             {
                 "user_id": "11111111-1111-1111-1111-111111111111",
-                "video_url": "https://public.final/video.mp4",
+                "final_url": "https://public.final/video.mp4",
+                "provider_video_url": "https://model/video.mp4",
                 "image_url": "https://example.com/pet.jpg",
                 "script": "Hello!",
                 "prompt": "Say hi",

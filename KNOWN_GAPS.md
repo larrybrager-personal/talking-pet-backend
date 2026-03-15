@@ -18,7 +18,6 @@
 - Verify Replicate version-level input schemas for newly added models in production and tune defaults/ranges per latest model version docs.
 - Revisit `kwaivgi/kling-v3-omni-video` once schema is confirmed; switch `runnable` to true and add payload tests.
 - Add endpoint-level tests for `/jobs_prompt_only` and `/jobs_prompt_tts` covering Wan 2.5 audio-input and VEED Fabric audio-driven flow with mocked Replicate responses.
-- Add endpoint compatibility tests for camelCase aliases on `/jobs_prompt_only` and `/jobs_prompt_tts` request models to mirror `/resolve_model` backward-compat behavior.
 
 - Add endpoint-level tests for `/jobs_prompt_tts` failed-idempotency branch to verify deterministic 409 response and no rerun on stored failures.
 - Consider adding stale `processing` recovery (heartbeat/lease ownership) for crashed owner requests so duplicates can eventually fail fast with clearer remediation.

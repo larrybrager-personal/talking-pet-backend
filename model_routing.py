@@ -37,10 +37,12 @@ def normalize_quality(
 
     normalized = str(quality or "fast").strip().lower()
     quality_aliases = {
+        "draft": "cheap",
         "best": "quality",
         "high": "quality",
         "medium": "balanced",
-        "low": "fast",
+        "standard": "fast",
+        "low": "cheap",
     }
     normalized = quality_aliases.get(normalized, normalized)
     if normalized not in {"fast", "balanced", "cheap", "quality"}:
@@ -83,6 +85,8 @@ async def resolve_plan_tier(
 
     fallback = (user_context or {}).get("plan_tier") or "free"
     fallback = str(fallback).strip().lower()
+    if fallback == "pro":
+        fallback = "creator"
     if fallback not in PLAN_RANK:
         fallback = "free"
 
@@ -105,6 +109,8 @@ async def resolve_plan_tier(
         rows = response.json()
         if rows and isinstance(rows, list):
             db_tier = str(rows[0].get("tier") or "free").strip().lower()
+            if db_tier == "pro":
+                db_tier = "creator"
             if db_tier in PLAN_RANK:
                 return db_tier
     except (httpx.HTTPError, ValueError, TypeError):
@@ -119,6 +125,8 @@ def _is_plan_at_least(plan_tier: str, required_tier: str) -> bool:
 def get_model_min_plan_tier(model_slug: str) -> str:
     model = SUPPORTED_MODELS.get(model_slug, {})
     min_plan_tier = str(model.get("min_plan_tier") or "free").strip().lower()
+    if min_plan_tier == "pro":
+        min_plan_tier = "creator"
     if min_plan_tier not in PLAN_RANK:
         return "free"
     return min_plan_tier
@@ -202,10 +210,13 @@ def _normalize_fps(requested_fps: int | None, supported_fps: list[int]) -> int |
 
 def _meta_for_slug(model_slug: str) -> dict[str, Any]:
     config = SUPPORTED_MODELS[model_slug]
+    quality_label = config["quality_label"]
+    credit_costs = {"cheap": 1, "fast": 2, "balanced": 4, "quality": 8}
     return {
         "name": config["name"],
         "tier": config["tier"],
-        "quality_label": config["quality_label"],
+        "quality_label": quality_label,
+        "credit_cost": credit_costs.get(str(quality_label).strip().lower(), 1),
         "blurb": config["blurb"],
         "supported_durations": config["supported_durations"],
         "supported_fps": config["supported_fps"],
@@ -220,20 +231,19 @@ def _pick_model_for_quality(quality: str, plan_tier: str) -> str:
     if plan_tier == "free":
         return "bytedance/seedance-1-pro-fast"
 
-    if quality == "quality":
-        if _is_plan_at_least(plan_tier, "studio"):
-            return "kwaivgi/kling-v2.6"
-        if _is_plan_at_least(plan_tier, "creator"):
-            return "wan-video/wan-2.6-i2v"
-        return "wan-video/wan2.6-i2v-flash"
-    if quality == "cheap":
-        if _is_plan_at_least(plan_tier, "creator"):
+    if plan_tier == "creator":
+        if quality == "cheap":
             return "bytedance/seedance-1-pro-fast"
-        return "wan-video/wan2.6-i2v-flash"
+        if quality == "fast":
+            return "wan-video/wan2.6-i2v-flash"
+        return "wan-video/wan-2.6-i2v"
+
+    if quality == "quality":
+        return "kwaivgi/kling-v2.6"
     if quality == "balanced":
-        if _is_plan_at_least(plan_tier, "creator"):
-            return "wan-video/wan-2.6-i2v"
-        return "wan-video/wan2.6-i2v-flash"
+        return "wan-video/wan-2.6-i2v"
+    if quality == "cheap":
+        return "bytedance/seedance-1-pro-fast"
     return "wan-video/wan2.6-i2v-flash"
 
 
@@ -250,6 +260,8 @@ async def resolve_model_for_intent(intent: dict[str, Any]) -> IntentResolutionRe
     fps = intent.get("fps")
 
     explicit_plan_tier = str(intent.get("plan_tier") or "").strip().lower()
+    if explicit_plan_tier == "pro":
+        explicit_plan_tier = "creator"
     if explicit_plan_tier in PLAN_RANK:
         plan_tier = explicit_plan_tier
     else:
@@ -338,7 +350,7 @@ def apply_allowed_model_params(
                 remainder = (float(value) - float(base)) / float(step)
                 if abs(remainder - round(remainder)) > 1e-9:
                     continue
-
-            normalized[key] = int(value) if isinstance(value, int) else float(value)
+            normalized[key] = value
+            continue
 
     return normalized

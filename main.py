@@ -39,6 +39,7 @@ from model_registry import (
     VIDEO_MODEL_ROUTES,
 )
 from model_routing import (
+    LEGACY_MODEL_ALIASES,
     PLAN_MAX_RESOLUTION,
     apply_allowed_model_params,
     cap_resolution_for_plan,
@@ -288,17 +289,13 @@ class JobPromptOnly(RequestModel):
     quality: str = "fast"
     fps: int | None = None
     model: str | None = None
-    model_override: str | None = Field(default=None, alias="modelOverride")
+    model_override: str | None = Field(default=None, alias="selectedOverrideModel")
     model_params: dict[str, Any] | None = Field(default=None, alias="modelParams")
     user_context: UserContext | None = Field(default=None, alias="userContext")
     request_id: str | None = Field(default=None, alias="requestId")
 
-    ALIAS_COMPAT_MAP: ClassVar[dict[str, tuple[str, ...]]] = {
-        "model_override": ("selectedOverrideModel",),
-    }
 
-
-class JobPromptTTS(JobPromptOnly):
+class JobPromptTTS(RequestModel):
     """Request body for generating a video and matching audio.
 
     Extends :class:`JobPromptOnly` with script text and desired ElevenLabs
@@ -315,8 +312,19 @@ class JobPromptTTS(JobPromptOnly):
         model: Optional Replicate model identifier. Defaults to the fast routing model.
     """
 
+    image_url: str = Field(alias="imageUrl")
+    prompt: str
     text: str
     voice_id: str = Field(alias="voiceId")
+    seconds: int = 6
+    resolution: str = "768p"
+    quality: str = "fast"
+    fps: int | None = None
+    model: str | None = None
+    model_override: str | None = Field(default=None, alias="selectedOverrideModel")
+    model_params: dict[str, Any] | None = Field(default=None, alias="modelParams")
+    user_context: UserContext | None = Field(default=None, alias="userContext")
+    request_id: str | None = Field(default=None, alias="requestId")
 
 
 class HeadRequest(BaseModel):
@@ -411,6 +419,67 @@ def _resolve_generation_settings(
     }
 
 
+def _serialize_tunable_params(
+    tunable_params: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return tunables with a stable ``description`` alias for ``help``."""
+
+    transformed_params: list[dict[str, Any]] = []
+    for tunable_param in tunable_params:
+        transformed_param = tunable_param.copy()
+        if "help" in transformed_param and "description" not in transformed_param:
+            transformed_param["description"] = transformed_param["help"]
+        transformed_params.append(transformed_param)
+    return transformed_params
+
+
+def _legacy_aliases_for_model(model_slug: str) -> list[str]:
+    """Return accepted legacy slugs that normalize to the canonical model id."""
+
+    aliases = [
+        alias
+        for alias, normalized in LEGACY_MODEL_ALIASES.items()
+        if normalized == model_slug
+    ]
+    return sorted(aliases)
+
+
+def _available_job_types(config: dict[str, Any]) -> list[str]:
+    """Return the frontend-visible job types supported by a model."""
+
+    if config.get("requires_audio_input", False):
+        return ["prompt_tts"]
+    return ["prompt_only", "prompt_tts"]
+
+
+def _build_model_meta(
+    config: dict[str, Any],
+    *,
+    plan_tier: str | None = None,
+) -> dict[str, Any]:
+    """Build frontend-facing model metadata from a model registry entry."""
+
+    meta: dict[str, Any] = {
+        "slug": config["slug"],
+        "name": config["name"],
+        "tier": config["tier"],
+        "quality_label": config["quality_label"],
+        "blurb": config["blurb"],
+        "default_params": config.get("default_params", {}),
+        "supported_durations": config.get("supported_durations", []),
+        "supported_fps": config.get("supported_fps", []),
+        "supported_resolutions": config.get("supported_resolutions", []),
+        "tunable_params": _serialize_tunable_params(config.get("tunable_params", [])),
+        "legacy_aliases": _legacy_aliases_for_model(config["slug"]),
+        "available_job_types": _available_job_types(config),
+        "min_plan_tier": config.get("min_plan_tier", "free"),
+        "runnable": config.get("runnable", True),
+    }
+    if plan_tier:
+        meta["plan_tier"] = plan_tier
+    return meta
+
+
 def get_model_config(model: str) -> dict:
     """Get configuration for a supported model.
 
@@ -436,6 +505,18 @@ def get_model_config(model: str) -> dict:
             f"Model '{model}' is experimental and not yet runnable.",
         )
     return config
+
+
+def _coerce_int_like(value: Any) -> int | None:
+    """Return an int for integral numeric values, else None."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
 
 
 def build_model_payload(
@@ -472,10 +553,15 @@ def build_model_payload(
         mapped_fps_key = param_mapping["fps"]
         if fps is not None:
             effective_fps = fps
-        elif isinstance(payload["input"].get(mapped_fps_key), int):
-            effective_fps = payload["input"].get(mapped_fps_key)
-        elif isinstance(config.get("default_params", {}).get(mapped_fps_key), int):
-            effective_fps = config["default_params"].get(mapped_fps_key)
+        else:
+            input_fps = _coerce_int_like(payload["input"].get(mapped_fps_key))
+            default_fps = _coerce_int_like(
+                config.get("default_params", {}).get(mapped_fps_key)
+            )
+            if input_fps is not None:
+                effective_fps = input_fps
+            elif default_fps is not None:
+                effective_fps = default_fps
 
     if "seconds" in param_mapping:
         duration_key = param_mapping["seconds"]
@@ -1546,35 +1632,15 @@ async def health(_: None = Depends(require_auth)):
 async def list_supported_models(_: None = Depends(require_auth)):
     """List all supported i2v models and routing metadata."""
 
-    def _serialize_tunable_params(
-        tunable_params: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        transformed_params: list[dict[str, Any]] = []
-        for tunable_param in tunable_params:
-            transformed_param = tunable_param.copy()
-            if "help" in transformed_param and "description" not in transformed_param:
-                transformed_param["description"] = transformed_param["help"]
-            transformed_params.append(transformed_param)
-        return transformed_params
-
     models = {}
     for model_id, config in SUPPORTED_MODELS.items():
-        models[model_id] = {
-            "name": config["name"],
-            "tier": config["tier"],
-            "quality_label": config["quality_label"],
-            "blurb": config["blurb"],
-            "capabilities": config["capabilities"],
-            "tunable_params": _serialize_tunable_params(
-                config.get("tunable_params", [])
-            ),
-            "supported_durations": config.get("supported_durations", []),
-            "supported_fps": config.get("supported_fps", []),
-            "supported_resolutions": config.get("supported_resolutions", []),
-            "min_plan_tier": config.get("min_plan_tier", "free"),
-            "runnable": config.get("runnable", True),
-            "is_default": model_id == DEFAULT_MODEL,
+        model_meta = _build_model_meta(config)
+        model_meta["capabilities"] = {
+            **config["capabilities"],
+            "requiresAudioInput": config.get("requires_audio_input", False),
         }
+        model_meta["is_default"] = model_id == DEFAULT_MODEL
+        models[model_id] = model_meta
     return {
         "supported_models": models,
         "default_model": DEFAULT_MODEL,
@@ -1620,25 +1686,20 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             quality=normalized_quality,
             plan_tier=plan_tier,
         )
-        meta = {
-            "name": config["name"],
-            "tier": config["tier"],
-            "quality_label": config["quality_label"],
-            "blurb": config["blurb"],
-            "supported_durations": config.get("supported_durations", []),
-            "supported_fps": config.get("supported_fps", []),
-            "supported_resolutions": config.get("supported_resolutions", []),
-            "tunable_params": config.get("tunable_params", []),
-            "min_plan_tier": config.get("min_plan_tier", "free"),
-            "runnable": config.get("runnable", True),
-            "plan_tier": plan_tier,
-        }
+        resolved_params = config.get("default_params", {}).copy()
+        resolved_params.update(apply_allowed_model_params(model, req.model_params))
+        if resolved_settings.get("fps") is not None and "fps" in config.get(
+            "param_mapping", {}
+        ):
+            resolved_params["fps"] = resolved_settings["fps"]
+        meta = _build_model_meta(config, plan_tier=plan_tier)
         return {
             "model": model,
             "resolved_model_slug": model,
             "plan_tier": plan_tier,
             "meta": meta,
             "resolved": {**resolved_settings},
+            "resolved_defaults": resolved_params,
         }
 
     try:
@@ -1651,12 +1712,29 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
     effective_plan_tier = resolved.get(
         "plan_tier", resolved["resolved_meta"].get("plan_tier")
     )
+    resolved_model_slug = resolved["resolved_model_slug"]
+    resolved_config = get_model_config(resolved_model_slug)
+    resolved_params = resolved.get("resolved_defaults")
+    if not isinstance(resolved_params, dict):
+        resolved_params = resolved_config.get("default_params", {}).copy()
+    else:
+        resolved_params = resolved_params.copy()
+
+    resolved_params.update(
+        apply_allowed_model_params(resolved_model_slug, req.model_params)
+    )
+    if resolved["resolved"].get("fps") is not None and "fps" in resolved_config.get(
+        "param_mapping", {}
+    ):
+        resolved_params["fps"] = resolved["resolved"]["fps"]
+
     return {
-        "model": resolved["resolved_model_slug"],
-        "resolved_model_slug": resolved["resolved_model_slug"],
+        "model": resolved_model_slug,
+        "resolved_model_slug": resolved_model_slug,
         "plan_tier": effective_plan_tier,
-        "meta": resolved["resolved_meta"],
+        "meta": _build_model_meta(resolved_config, plan_tier=effective_plan_tier),
         "resolved": resolved["resolved"],
+        "resolved_defaults": resolved_params,
     }
 
 
@@ -1730,11 +1808,10 @@ async def _resolve_job_model(
         config = get_model_config(chosen)
         resolved = result["resolved"]
 
-    if not has_audio and chosen == "wan-video/wan-2.2-s2v":
+    if not has_audio and config.get("requires_audio_input", False):
         raise HTTPException(
             400,
-            "wan-video/wan-2.2-s2v is a speech-to-video model that requires audio. "
-            "Use /jobs_prompt_tts endpoint instead.",
+            f"{chosen} requires audio input. Use /jobs_prompt_tts endpoint instead.",
         )
 
     params = config.get("default_params", {}).copy()

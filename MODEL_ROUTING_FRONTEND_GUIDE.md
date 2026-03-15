@@ -12,6 +12,7 @@ Use this guide when wiring a UI or agent client to the backend model-routing flo
 4. Submit final generation request via:
    - `POST /jobs_prompt_only`, or
    - `POST /jobs_prompt_tts`
+   - Frontend camelCase request keys are accepted on both job endpoints (`imageUrl`, `voiceId`, `selectedOverrideModel`, `modelParams`, `userContext`, `requestId`)
 5. Render returned URLs (`video_url`, `audio_url`, `final_url`) with `final_url` as the canonical playback URL.
 
 ## 2) Tier and route defaults
@@ -24,12 +25,19 @@ Routing defaults:
 
 `default_model` is the fast route default.
 
+Each model entry also includes frontend-facing contract helpers:
+- `slug`: canonical model id to store and submit.
+- `default_params`: backend defaults before request overrides.
+- `legacy_aliases`: old slugs still accepted and normalized.
+- `available_job_types`: whether the model can be used for `prompt_only`, `prompt_tts`, or both.
+
 
 ## 3.1) Capability semantics (canonical)
 
 In `GET /models`, interpret capability flags as:
 - `supportsAudioIn`: model accepts external audio conditioning input from the request.
 - `generatesAudio`: model may produce its own audio track without external audio input.
+- `requiresAudioInput`: model cannot be used from `POST /jobs_prompt_only`.
 
 These two booleans are independent and should not be conflated in frontend logic.
 
@@ -52,6 +60,7 @@ The backend will normalize request settings to model-supported values:
 - `model_params` are filtered to an allowlist for the chosen model.
 
 Treat `resolved` values from `POST /resolve_model` as source-of-truth preview values.
+Use `resolved_defaults` from `POST /resolve_model` as the backend-filtered parameter set that will be passed to Replicate input shaping.
 
 ## 5) Prompt-only request example
 
@@ -92,7 +101,7 @@ Treat `resolved` values from `POST /resolve_model` as source-of-truth preview va
 |---|---|
 | `GET /health` | `{ ok: boolean }` |
 | `GET /models` | `{ supported_models: Record<string, ModelMeta>, default_model: string, routing_defaults: RoutingDefaults }` |
-| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string } }` |
+| `POST /resolve_model` | `{ model: string, resolved_model_slug: string, plan_tier: string, meta: object, resolved: { seconds: number, resolution: string, fps: number \| null, quality: string }, resolved_defaults: object }` |
 | `POST /jobs_prompt_only` | `{ video_url: string, final_url: string }` |
 | `POST /jobs_prompt_tts` | `{ audio_url: string, video_url: string, final_url: string }` |
 | `POST /debug/head` | `{ status: number, content_type: string \| null, bytes: number \| null }` |
@@ -128,7 +137,7 @@ Prefer snake_case in new code, but both forms are contractually supported.
 ## 7) Important UX notes
 - Keep prompts concise and concrete.
 - Keep TTS script short for best lip-sync and pacing.
-- Do not send `wan-video/wan-2.2-s2v` to `/jobs_prompt_only` (audio-required model).
+- Do not send models with `capabilities.requiresAudioInput=true` to `/jobs_prompt_only`.
 - Use returned URLs directly; backend uploads everything to Supabase Storage.
 
 ## 8) Error handling patterns

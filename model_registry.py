@@ -282,6 +282,7 @@ SUPPORTED_MODELS = {
         "min_plan_tier": "creator",
         "quality_label": "balanced",
         "blurb": "Legacy speech-to-video path with native audio sync.",
+        "requires_audio_input": True,
         "capabilities": {
             "supportsImageToVideo": True,
             "supportsTextToVideo": False,
@@ -623,6 +624,7 @@ SUPPORTED_MODELS = {
         "min_plan_tier": "studio",
         "quality_label": "quality",
         "blurb": "Audio-driven talking animation where clip length follows audio input.",
+        "requires_audio_input": True,
         "capabilities": {
             "supportsImageToVideo": True,
             "supportsTextToVideo": False,

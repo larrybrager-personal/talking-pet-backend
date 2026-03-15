@@ -19,7 +19,7 @@ import time
 import uuid
 from http import HTTPStatus
 from functools import lru_cache
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar, Tuple
 from urllib.parse import urljoin, urlparse
 
@@ -114,6 +114,156 @@ logger = logging.getLogger("talking_pet_backend")
 
 # Backward-compatible re-exports used by tests/importers.
 _ROUTING_HELPERS_COMPAT = (normalize_video_model, get_default_video_model)
+
+PLAN_CREDIT_LIMITS: dict[str, dict[str, Any]] = {
+    "free": {"type": "limited", "period": "lifetime", "limit": 5},
+    "creator": {"type": "limited", "period": "monthly", "limit": 30},
+    "studio": {"type": "limited", "period": "monthly", "limit": 120},
+    "ultimate": {"type": "unlimited"},
+}
+MODEL_CREDIT_COSTS = {
+    "cheap": 1,
+    "fast": 2,
+    "balanced": 4,
+    "quality": 8,
+}
+
+
+def get_plan_credit_limit(plan_tier: str) -> dict[str, Any]:
+    """Return quota definition for a normalized plan tier."""
+
+    return PLAN_CREDIT_LIMITS.get(plan_tier, PLAN_CREDIT_LIMITS["free"])
+
+
+def get_credit_cost_for_model(model_slug: str) -> int:
+    """Return weighted credit cost for a model based on its quality lane."""
+
+    quality_label = str(
+        SUPPORTED_MODELS.get(model_slug, {}).get("quality_label") or "cheap"
+    ).strip().lower()
+    return MODEL_CREDIT_COSTS.get(quality_label, MODEL_CREDIT_COSTS["cheap"])
+
+
+def get_usage_period_start(period: str, reference: datetime | None = None) -> datetime | None:
+    """Mirror frontend quota period logic for backend enforcement."""
+
+    if period == "lifetime":
+        return None
+
+    reference = reference or datetime.now(timezone.utc)
+    if period == "monthly":
+        return datetime(reference.year, reference.month, 1, tzinfo=timezone.utc)
+
+    if period == "weekly":
+        midnight = datetime(
+            reference.year,
+            reference.month,
+            reference.day,
+            tzinfo=timezone.utc,
+        )
+        days_since_monday = (midnight.weekday() + 0) % 7
+        return midnight - timedelta(days=days_since_monday)
+
+    return None
+
+
+async def get_used_credits_for_period(
+    *, user_id: str, plan_tier: str, now: datetime | None = None
+) -> dict[str, Any]:
+    """Sum persisted weighted credits for the active quota window."""
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+        raise HTTPException(500, "Supabase env not set")
+
+    quota = get_plan_credit_limit(plan_tier)
+    if quota.get("type") == "unlimited":
+        return {
+            "used": 0,
+            "limit": None,
+            "remaining": None,
+            "period": None,
+            "period_start": None,
+        }
+
+    period = str(quota.get("period") or "lifetime")
+    period_start = get_usage_period_start(period, now)
+
+    endpoint = f"{SUPABASE_URL}/rest/v1/pet_videos"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "apikey": SUPABASE_SERVICE_ROLE,
+    }
+    params = {"select": "credit_cost", "user_id": f"eq.{user_id}"}
+    if period_start is not None:
+        params["created_at"] = f"gte.{period_start.isoformat()}"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(endpoint, headers=headers, params=params)
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            response.status_code,
+            f"Supabase quota lookup failed: {response.text}",
+        )
+
+    used = 0
+    for row in response.json() or []:
+        raw_cost = row.get("credit_cost") if isinstance(row, dict) else None
+        if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool):
+            used += int(raw_cost)
+        else:
+            used += 1
+
+    limit = int(quota["limit"])
+    return {
+        "used": used,
+        "limit": limit,
+        "remaining": max(limit - used, 0),
+        "period": period,
+        "period_start": period_start.isoformat() if period_start else None,
+    }
+
+
+async def enforce_generation_quota(*, user_context: "UserContext | None", model: str, plan_tier: str) -> dict[str, Any]:
+    """Reject requests that would exceed the user's weighted credit allowance."""
+
+    if not user_context or not user_context.id:
+        return {
+            "used": 0,
+            "limit": None,
+            "remaining": None,
+            "period": None,
+            "period_start": None,
+            "required": get_credit_cost_for_model(model),
+        }
+
+    quota = get_plan_credit_limit(plan_tier)
+    required_credits = get_credit_cost_for_model(model)
+    if quota.get("type") == "unlimited":
+        return {
+            "used": 0,
+            "limit": None,
+            "remaining": None,
+            "period": None,
+            "period_start": None,
+            "required": required_credits,
+        }
+
+    usage = await get_used_credits_for_period(
+        user_id=user_context.id,
+        plan_tier=plan_tier,
+    )
+    remaining = usage["remaining"]
+    if remaining is not None and remaining < required_credits:
+        raise HTTPException(
+            403,
+            (
+                f"This generation requires {required_credits} credit(s), but you only have "
+                f"{remaining} remaining on the {plan_tier} plan."
+            ),
+        )
+
+    return {**usage, "required": required_credits}
 
 
 def _log_unexpected_job_error(
@@ -267,6 +417,12 @@ class ModelIntentRequest(RequestModel):
     has_audio: bool = Field(default=False, alias="hasAudio")
     model_override: str | None = Field(default=None, alias="selectedOverrideModel")
     model_params: dict[str, Any] | None = Field(default=None, alias="modelParams")
+    user_context: UserContext | None = Field(default=None, alias="userContext")
+
+
+class QuotaSummaryRequest(RequestModel):
+    """Quota summary request for a specific authenticated user context."""
+
     user_context: UserContext | None = Field(default=None, alias="userContext")
 
 
@@ -831,6 +987,9 @@ async def insert_pet_video(
     resolution: str,
     duration: int,
     model: str,
+    credit_cost: int | None = None,
+    plan_tier: str | None = None,
+    routing_quality: str | None = None,
     created_at: datetime | None = None,
 ) -> None:
     """Persist a generated pet video record via Supabase PostgREST.
@@ -864,6 +1023,9 @@ async def insert_pet_video(
         "resolution": resolution,
         "duration": duration,
         "model": model,
+        "credit_cost": credit_cost if credit_cost is not None else get_credit_cost_for_model(model),
+        "plan_tier": plan_tier,
+        "routing_quality": routing_quality,
         "created_at": created_at.isoformat(),
     }
 
@@ -1572,6 +1734,7 @@ async def list_supported_models(_: None = Depends(require_auth)):
             "supported_fps": config.get("supported_fps", []),
             "supported_resolutions": config.get("supported_resolutions", []),
             "min_plan_tier": config.get("min_plan_tier", "free"),
+            "credit_cost": get_credit_cost_for_model(model_id),
             "runnable": config.get("runnable", True),
             "is_default": model_id == DEFAULT_MODEL,
         }
@@ -1579,6 +1742,34 @@ async def list_supported_models(_: None = Depends(require_auth)):
         "supported_models": models,
         "default_model": DEFAULT_MODEL,
         "routing_defaults": VIDEO_MODEL_ROUTES,
+    }
+
+
+@app.post("/quota_summary")
+async def quota_summary(req: QuotaSummaryRequest, _: None = Depends(require_auth)):
+    """Return weighted credit usage for the caller's current plan window."""
+
+    if not req.user_context or not req.user_context.id:
+        raise HTTPException(400, "user_context.id is required")
+
+    try:
+        user_id = str(uuid.UUID(req.user_context.id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, "user_context.id must be a valid UUID") from exc
+
+    plan_tier = await resolve_plan_tier(
+        to_model_dict(req.user_context),
+        SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE,
+    )
+    usage = await get_used_credits_for_period(
+        user_id=user_id,
+        plan_tier=plan_tier,
+    )
+    return {
+        **usage,
+        "plan_tier": plan_tier,
+        "unit": "credits",
     }
 
 
@@ -1630,6 +1821,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             "supported_resolutions": config.get("supported_resolutions", []),
             "tunable_params": config.get("tunable_params", []),
             "min_plan_tier": config.get("min_plan_tier", "free"),
+            "credit_cost": get_credit_cost_for_model(model),
             "runnable": config.get("runnable", True),
             "plan_tier": plan_tier,
         }
@@ -1637,6 +1829,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
             "model": model,
             "resolved_model_slug": model,
             "plan_tier": plan_tier,
+            "credit_cost": get_credit_cost_for_model(model),
             "meta": meta,
             "resolved": {**resolved_settings},
         }
@@ -1655,6 +1848,7 @@ async def resolve_model(req: ModelIntentRequest, _: None = Depends(require_auth)
         "model": resolved["resolved_model_slug"],
         "resolved_model_slug": resolved["resolved_model_slug"],
         "plan_tier": effective_plan_tier,
+        "credit_cost": get_credit_cost_for_model(resolved["resolved_model_slug"]),
         "meta": resolved["resolved_meta"],
         "resolved": resolved["resolved"],
     }
@@ -1671,7 +1865,7 @@ async def _resolve_job_model(
     model: str | None,
     model_override: str | None,
     model_params: dict[str, Any] | None,
-) -> tuple[str, dict[str, Any], dict[str, Any]]:
+) -> tuple[str, dict[str, Any], dict[str, Any], str]:
     normalized_quality = normalize_quality(quality)
     override = model_override or model
     plan_tier = await resolve_plan_tier(
@@ -1742,7 +1936,7 @@ async def _resolve_job_model(
     if resolved.get("fps") is not None and "fps" in config.get("param_mapping", {}):
         params["fps"] = resolved["fps"]
 
-    return chosen, params, resolved
+    return chosen, params, resolved, plan_tier
 
 
 @app.post("/jobs_prompt_only")
@@ -1752,7 +1946,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
     user_id = req.user_context.id if req.user_context else None
     _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
-    model, input_params, resolved = await _resolve_job_model(
+    model, input_params, resolved, plan_tier = await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
         quality=req.quality,
@@ -1781,6 +1975,12 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                 normalized_request_id,
             )
             return existing_response
+
+    quota_usage = await enforce_generation_quota(
+        user_context=req.user_context,
+        model=model,
+        plan_tier=plan_tier,
+    )
 
     try:
         video_url = await generate_video_from_prompt(
@@ -1828,6 +2028,9 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
                 resolution=resolved["resolution"],
                 duration=resolved["seconds"],
                 model=model,
+                credit_cost=quota_usage["required"],
+                plan_tier=plan_tier,
+                routing_quality=str(resolved.get("quality") or ""),
             )
         except HTTPException:
             await supabase_delete(final_key)
@@ -1836,7 +2039,12 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
             await supabase_delete(final_key)
             raise
 
-        response_payload = {"video_url": video_url, "final_url": final_url}
+        response_payload = {
+            "video_url": video_url,
+            "final_url": final_url,
+            "credit_cost": quota_usage["required"],
+            "plan_tier": plan_tier,
+        }
         if normalized_request_id:
             await update_job_request_best_effort(
                 normalized_request_id,
@@ -1879,7 +2087,7 @@ async def create_job_with_prompt_and_tts(
     user_id = req.user_context.id if req.user_context else None
     _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
-    model, input_params, resolved = await _resolve_job_model(
+    model, input_params, resolved, plan_tier = await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
         quality=req.quality,
@@ -1908,6 +2116,12 @@ async def create_job_with_prompt_and_tts(
                 normalized_request_id,
             )
             return existing_response
+
+    quota_usage = await enforce_generation_quota(
+        user_context=req.user_context,
+        model=model,
+        plan_tier=plan_tier,
+    )
 
     final_key: str | None = None
     audio_key: str | None = None
@@ -1985,12 +2199,17 @@ async def create_job_with_prompt_and_tts(
             resolution=resolved["resolution"],
             duration=resolved["seconds"],
             model=model,
+            credit_cost=quota_usage["required"],
+            plan_tier=plan_tier,
+            routing_quality=str(resolved.get("quality") or ""),
         )
 
         response_payload = {
             "audio_url": audio_public_url,
             "video_url": video_url,
             "final_url": final_url,
+            "credit_cost": quota_usage["required"],
+            "plan_tier": plan_tier,
         }
         if normalized_request_id:
             await update_job_request_best_effort(

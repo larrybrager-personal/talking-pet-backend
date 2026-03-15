@@ -278,11 +278,15 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
         wan26_fast = payload["supported_models"]["wan-video/wan2.6-i2v-flash"]
 
         self.assertTrue(wan26_fast["is_default"])
+        self.assertEqual(wan26_fast["slug"], "wan-video/wan2.6-i2v-flash")
         self.assertEqual(wan26_fast["tier"], "fast")
+        self.assertIn("default_params", wan26_fast)
         self.assertIn("supported_durations", wan26_fast)
         self.assertIn("supported_fps", wan26_fast)
         self.assertIn("blurb", wan26_fast)
         self.assertIn("tunable_params", wan26_fast)
+        self.assertIn("legacy_aliases", wan26_fast)
+        self.assertIn("available_job_types", wan26_fast)
         self.assertIn("min_plan_tier", wan26_fast)
 
     def test_tunable_params_include_description_alias_for_help(self):
@@ -309,6 +313,30 @@ class ModelsEndpointResolutionTestCase(unittest.TestCase):
 
         payload = response.json()
         self.assertEqual(payload["default_model"], "wan-video/wan2.6-i2v-flash")
+
+    def test_models_endpoint_includes_every_supported_model(self):
+        response = self.client.get("/models")
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertEqual(
+            set(payload["supported_models"].keys()),
+            set(main.SUPPORTED_MODELS.keys()),
+        )
+
+    def test_models_endpoint_exposes_legacy_aliases_and_job_type_availability(self):
+        response = self.client.get("/models")
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        hailuo = payload["supported_models"]["minimax/hailuo-2.3"]
+        speech_model = payload["supported_models"]["wan-video/wan-2.2-s2v"]
+
+        self.assertEqual(hailuo["legacy_aliases"], ["minimax/hailuo-02"])
+        self.assertEqual(hailuo["available_job_types"], ["prompt_only", "prompt_tts"])
+        self.assertFalse(hailuo["capabilities"]["requiresAudioInput"])
+        self.assertEqual(speech_model["available_job_types"], ["prompt_tts"])
+        self.assertTrue(speech_model["capabilities"]["requiresAudioInput"])
 
     def test_override_model_rejects_when_plan_disallows_model(self):
         with patch("main.resolve_plan_tier", new_callable=AsyncMock) as mock_tier:
@@ -714,6 +742,25 @@ class ResolveJobModelErrorMappingTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exc.exception.status_code, 400)
         self.assertIn("Unsupported model", exc.exception.detail)
 
+    async def test_resolve_job_model_rejects_audio_required_override_for_prompt_only(self):
+        with self.assertRaises(main.HTTPException) as exc:
+            await main._resolve_job_model(
+                seconds=6,
+                resolution="1080p",
+                quality="quality",
+                fps=None,
+                has_audio=False,
+                user_context=main.UserContext(
+                    id="00000000-0000-0000-0000-000000000000", plan_tier="studio"
+                ),
+                model=None,
+                model_override="veed/fabric-1.0",
+                model_params=None,
+            )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertIn("requires audio input", exc.exception.detail)
+
 
 class JobsEndpointResponseContractTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -727,7 +774,9 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
     def test_jobs_prompt_only_response_contains_video_and_final_url(self):
         with (
             patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
-            patch("main.generate_video_from_prompt", new_callable=AsyncMock) as mock_generate,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch(
                 "main.prepare_video_for_upload_with_debug",
@@ -736,7 +785,9 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
             patch("main.build_storage_key", return_value="videos/final.mp4"),
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
             patch("main.insert_pet_video", new_callable=AsyncMock),
-            patch("main.collect_video_delivery_debug", new_callable=AsyncMock) as mock_debug,
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
         ):
             mock_resolve.return_value = (
                 "bytedance/seedance-1-pro-fast",
@@ -763,17 +814,27 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
         with (
             patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
             patch("main.elevenlabs_tts_bytes", new_callable=AsyncMock) as mock_tts,
-            patch("main.build_storage_key", side_effect=["audio/file.mp3", "videos/final.mp4"]),
+            patch(
+                "main.build_storage_key",
+                side_effect=["audio/file.mp3", "videos/final.mp4"],
+            ),
             patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
-            patch("main.get_model_config", return_value={"capabilities": {"supportsAudioIn": True}}),
-            patch("main.generate_video_from_prompt", new_callable=AsyncMock) as mock_generate,
+            patch(
+                "main.get_model_config",
+                return_value={"capabilities": {"supportsAudioIn": True}},
+            ),
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
             patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
             patch(
                 "main.prepare_video_for_upload_with_debug",
                 return_value=(b"upload-ready", {"meets_target": True}),
             ),
             patch("main.insert_pet_video", new_callable=AsyncMock),
-            patch("main.collect_video_delivery_debug", new_callable=AsyncMock) as mock_debug,
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
         ):
             mock_resolve.return_value = (
                 "wan-video/wan2.6-i2v-flash",
@@ -806,6 +867,120 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
         self.assertEqual(payload["video_url"], "https://provider/video.mp4")
         self.assertEqual(payload["final_url"], "https://supabase/final.mp4")
 
+    def test_jobs_prompt_only_accepts_frontend_camel_case_fields(self):
+        with (
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"compressed", {"meets_target": True}),
+            ),
+            patch("main.build_storage_key", return_value="videos/final.mp4"),
+            patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch("main.insert_pet_video", new_callable=AsyncMock),
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
+        ):
+            mock_resolve.return_value = (
+                "wan-video/wan2.6-i2v-flash",
+                {"fps": 24},
+                {"seconds": 5, "resolution": "720p", "fps": 24},
+            )
+            mock_generate.return_value = "https://provider/video.mp4"
+            mock_fetch.return_value = b"video-bytes"
+            mock_upload.return_value = "https://supabase/final.mp4"
+            mock_debug.return_value = {"head_status": 200, "content_length": 100}
+
+            response = self.client.post(
+                "/jobs_prompt_only",
+                json={
+                    "imageUrl": "https://example.com/pet.jpg",
+                    "prompt": "hello",
+                    "selectedOverrideModel": "wan-video/wan2.6-i2v-flash",
+                    "modelParams": {"fps": 24},
+                    "userContext": {
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "planTier": "creator",
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        resolve_kwargs = mock_resolve.await_args.kwargs
+        self.assertEqual(
+            resolve_kwargs["model_override"], "wan-video/wan2.6-i2v-flash"
+        )
+        self.assertEqual(resolve_kwargs["model_params"], {"fps": 24})
+        self.assertEqual(resolve_kwargs["user_context"].plan_tier, "creator")
+
+    def test_jobs_prompt_tts_accepts_frontend_camel_case_fields(self):
+        with (
+            patch("main._resolve_job_model", new_callable=AsyncMock) as mock_resolve,
+            patch("main.elevenlabs_tts_bytes", new_callable=AsyncMock) as mock_tts,
+            patch(
+                "main.build_storage_key",
+                side_effect=["audio/file.mp3", "videos/final.mp4"],
+            ),
+            patch("main.supabase_upload", new_callable=AsyncMock) as mock_upload,
+            patch(
+                "main.get_model_config",
+                return_value={"capabilities": {"supportsAudioIn": True}},
+            ),
+            patch(
+                "main.generate_video_from_prompt", new_callable=AsyncMock
+            ) as mock_generate,
+            patch("main.fetch_binary", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "main.prepare_video_for_upload_with_debug",
+                return_value=(b"upload-ready", {"meets_target": True}),
+            ),
+            patch("main.insert_pet_video", new_callable=AsyncMock),
+            patch(
+                "main.collect_video_delivery_debug", new_callable=AsyncMock
+            ) as mock_debug,
+        ):
+            mock_resolve.return_value = (
+                "wan-video/wan2.6-i2v-flash",
+                {"fps": 24},
+                {"seconds": 5, "resolution": "720p", "fps": 24},
+            )
+            mock_tts.return_value = b"mp3"
+            mock_upload.side_effect = [
+                "https://supabase/audio.mp3",
+                "https://supabase/final.mp4",
+            ]
+            mock_generate.return_value = "https://provider/video.mp4"
+            mock_fetch.return_value = b"video"
+            mock_debug.return_value = {"head_status": 200, "content_length": 100}
+
+            response = self.client.post(
+                "/jobs_prompt_tts",
+                json={
+                    "imageUrl": "https://example.com/pet.jpg",
+                    "prompt": "hello",
+                    "text": "hi",
+                    "voiceId": "voice",
+                    "selectedOverrideModel": "wan-video/wan2.6-i2v-flash",
+                    "modelParams": {"fps": 24},
+                    "userContext": {
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "planTier": "creator",
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        resolve_kwargs = mock_resolve.await_args.kwargs
+        self.assertEqual(
+            resolve_kwargs["model_override"], "wan-video/wan2.6-i2v-flash"
+        )
+        self.assertEqual(resolve_kwargs["model_params"], {"fps": 24})
+        self.assertEqual(resolve_kwargs["user_context"].plan_tier, "creator")
+
     def test_models_capability_flags_are_booleans_for_semantic_contract(self):
         response = self.client.get("/models")
         self.assertEqual(response.status_code, 200)
@@ -815,8 +990,10 @@ class JobsEndpointResponseContractTestCase(unittest.TestCase):
             capabilities = model["capabilities"]
             self.assertIn("supportsAudioIn", capabilities)
             self.assertIn("generatesAudio", capabilities)
+            self.assertIn("requiresAudioInput", capabilities)
             self.assertIsInstance(capabilities["supportsAudioIn"], bool)
             self.assertIsInstance(capabilities["generatesAudio"], bool)
+            self.assertIsInstance(capabilities["requiresAudioInput"], bool)
 
 
 if __name__ == "__main__":

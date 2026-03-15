@@ -121,16 +121,17 @@ Response:
 
 ### `GET /models`
 Returns:
-- `supported_models` with UI metadata (`tier`, `quality_label`, capabilities, tunables, supported durations/fps/resolutions)
+- `supported_models` with UI metadata (`slug`, `tier`, `quality_label`, `default_params`, `legacy_aliases`, `available_job_types`, capabilities, tunables, supported durations/fps/resolutions)
 - `default_model`
 - `routing_defaults`
 
 Capability semantics used by `supported_models[*].capabilities`:
 - `supportsAudioIn`: model accepts externally supplied audio conditioning input.
 - `generatesAudio`: model may generate an internal audio track on its own.
+- `requiresAudioInput`: model must be used via `/jobs_prompt_tts`.
 
 ### `POST /resolve_model`
-Request (example):
+Request (example, snake_case or camelCase both accepted):
 ```json
 {
   "seconds": 6,
@@ -155,7 +156,7 @@ Response includes:
 - `plan_tier`
 
 ### `POST /jobs_prompt_only`
-Request (example):
+Request (example, snake_case or camelCase both accepted):
 ```json
 {
   "image_url": "https://example.com/pet.jpg",
@@ -181,7 +182,7 @@ Response:
 ```
 
 ### `POST /jobs_prompt_tts`
-Request (example):
+Request (example, snake_case or camelCase both accepted):
 ```json
 {
   "image_url": "https://example.com/pet.jpg",
@@ -261,7 +262,7 @@ When `API_AUTH_ENABLED=false` (default), auth is bypassed.
 - Resolution aliases are normalized (`768p`→`720p`, `1024p`→`1080p`) when needed.
 - `model_params` are filtered against model-specific allowlists.
 - `image_url` and debug URL inputs must be `http(s)` and publicly routable unless `ALLOW_PRIVATE_URL_FETCHES=true`.
-- `/jobs_prompt_only` rejects legacy `wan-video/wan-2.2-s2v` because it requires audio.
+- `/jobs_prompt_only` rejects models that require audio input (for example `wan-video/wan-2.2-s2v` and `veed/fabric-1.0`).
 
 ---
 
@@ -300,6 +301,7 @@ pytest -q
 ## Repository docs map
 - `README.md`: architecture + API + env + runbook (this file)
 - `MODEL_ROUTING_FRONTEND_GUIDE.md`: frontend-oriented routing and payload guidance
+- `FRONTEND_BACKEND_ALIGNMENT.md`: copy-friendly backend contract for the frontend repo
 - `KNOWN_GAPS.md`: backlog of gaps/follow-ups
 - `PROGRESS_LOG.md`: timestamped change history
 

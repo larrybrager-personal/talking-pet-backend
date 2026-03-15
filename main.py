@@ -39,6 +39,7 @@ from model_registry import (
     VIDEO_MODEL_ROUTES,
 )
 from model_routing import (
+    LEGACY_MODEL_ALIASES,
     PLAN_MAX_RESOLUTION,
     apply_allowed_model_params,
     cap_resolution_for_plan,
@@ -257,7 +258,7 @@ class ModelIntentRequest(RequestModel):
     user_context: UserContext | None = Field(default=None, alias="userContext")
 
 
-class JobPromptOnly(BaseModel):
+class JobPromptOnly(RequestModel):
     """Request body for generating a video directly from a prompt.
 
     Attributes:
@@ -268,20 +269,20 @@ class JobPromptOnly(BaseModel):
         model: Optional Replicate model identifier. Defaults to the fast routing model.
     """
 
-    image_url: str
+    image_url: str = Field(alias="imageUrl")
     prompt: str
     seconds: int = 6
     resolution: str = "768p"
     quality: str = "fast"
     fps: int | None = None
     model: str | None = None
-    model_override: str | None = None
-    model_params: dict[str, Any] | None = None
-    user_context: UserContext | None = None
-    request_id: str | None = None
+    model_override: str | None = Field(default=None, alias="selectedOverrideModel")
+    model_params: dict[str, Any] | None = Field(default=None, alias="modelParams")
+    user_context: UserContext | None = Field(default=None, alias="userContext")
+    request_id: str | None = Field(default=None, alias="requestId")
 
 
-class JobPromptTTS(BaseModel):
+class JobPromptTTS(RequestModel):
     """Request body for generating a video and matching audio.
 
     Extends :class:`JobPromptOnly` with script text and desired ElevenLabs
@@ -298,19 +299,19 @@ class JobPromptTTS(BaseModel):
         model: Optional Replicate model identifier. Defaults to the fast routing model.
     """
 
-    image_url: str
+    image_url: str = Field(alias="imageUrl")
     prompt: str
     text: str
-    voice_id: str
+    voice_id: str = Field(alias="voiceId")
     seconds: int = 6
     resolution: str = "768p"
     quality: str = "fast"
     fps: int | None = None
     model: str | None = None
-    model_override: str | None = None
-    model_params: dict[str, Any] | None = None
-    user_context: UserContext | None = None
-    request_id: str | None = None
+    model_override: str | None = Field(default=None, alias="selectedOverrideModel")
+    model_params: dict[str, Any] | None = Field(default=None, alias="modelParams")
+    user_context: UserContext | None = Field(default=None, alias="userContext")
+    request_id: str | None = Field(default=None, alias="requestId")
 
 
 class HeadRequest(BaseModel):
@@ -419,6 +420,25 @@ def _serialize_tunable_params(
     return transformed_params
 
 
+def _legacy_aliases_for_model(model_slug: str) -> list[str]:
+    """Return accepted legacy slugs that normalize to the canonical model id."""
+
+    aliases = [
+        alias
+        for alias, normalized in LEGACY_MODEL_ALIASES.items()
+        if normalized == model_slug
+    ]
+    return sorted(aliases)
+
+
+def _available_job_types(config: dict[str, Any]) -> list[str]:
+    """Return the frontend-visible job types supported by a model."""
+
+    if config.get("requires_audio_input", False):
+        return ["prompt_tts"]
+    return ["prompt_only", "prompt_tts"]
+
+
 def _build_model_meta(
     config: dict[str, Any],
     *,
@@ -427,14 +447,18 @@ def _build_model_meta(
     """Build frontend-facing model metadata from a model registry entry."""
 
     meta: dict[str, Any] = {
+        "slug": config["slug"],
         "name": config["name"],
         "tier": config["tier"],
         "quality_label": config["quality_label"],
         "blurb": config["blurb"],
+        "default_params": config.get("default_params", {}),
         "supported_durations": config.get("supported_durations", []),
         "supported_fps": config.get("supported_fps", []),
         "supported_resolutions": config.get("supported_resolutions", []),
         "tunable_params": _serialize_tunable_params(config.get("tunable_params", [])),
+        "legacy_aliases": _legacy_aliases_for_model(config["slug"]),
+        "available_job_types": _available_job_types(config),
         "min_plan_tier": config.get("min_plan_tier", "free"),
         "runnable": config.get("runnable", True),
     }
@@ -1595,7 +1619,10 @@ async def list_supported_models(_: None = Depends(require_auth)):
     models = {}
     for model_id, config in SUPPORTED_MODELS.items():
         model_meta = _build_model_meta(config)
-        model_meta["capabilities"] = config["capabilities"]
+        model_meta["capabilities"] = {
+            **config["capabilities"],
+            "requiresAudioInput": config.get("requires_audio_input", False),
+        }
         model_meta["is_default"] = model_id == DEFAULT_MODEL
         models[model_id] = model_meta
     return {
@@ -1765,11 +1792,10 @@ async def _resolve_job_model(
         config = get_model_config(chosen)
         resolved = result["resolved"]
 
-    if not has_audio and chosen == "wan-video/wan-2.2-s2v":
+    if not has_audio and config.get("requires_audio_input", False):
         raise HTTPException(
             400,
-            "wan-video/wan-2.2-s2v is a speech-to-video model that requires audio. "
-            "Use /jobs_prompt_tts endpoint instead.",
+            f"{chosen} requires audio input. Use /jobs_prompt_tts endpoint instead.",
         )
 
     params = config.get("default_params", {}).copy()

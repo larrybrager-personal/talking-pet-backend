@@ -43,3 +43,4 @@
 ## 2026-03-14 Migration Guard Follow-ups
 - Add an integration test harness that runs SQL migrations against an empty Postgres schema to catch missing-table assumptions before deployment.
 - If `public.pet_videos` becomes guaranteed in baseline schema later, consider simplifying this migration by moving canonical column creation/backfill into the table-create migration chain.
+- Consolidate `public.job_requests` into a single source-of-truth migration. The frontend repo currently provisions a different schema (`id`, `request_hash`, `expires_at`, `status='pending'`, `request_id text`) than the backend repo expects (`request_id uuid primary key`, no `id`, status limited to `processing|succeeded|failed`). That divergence is a rollout risk for idempotency and future async-job polling.

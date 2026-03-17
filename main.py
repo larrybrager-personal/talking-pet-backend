@@ -94,6 +94,7 @@ MAX_REDIRECT_HOPS = int(os.getenv("MAX_REDIRECT_HOPS", "5"))
 ASYNC_JOB_POLL_INTERVAL_SEC = float(os.getenv("ASYNC_JOB_POLL_INTERVAL_SEC", "5"))
 ASYNC_JOB_MAX_ATTEMPTS = int(os.getenv("ASYNC_JOB_MAX_ATTEMPTS", "3"))
 ASYNC_JOB_DEFAULT_LIMIT = int(os.getenv("ASYNC_JOB_DEFAULT_LIMIT", "20"))
+ASYNC_JOB_STALE_LOCK_SEC = float(os.getenv("ASYNC_JOB_STALE_LOCK_SEC", "300"))
 ALLOW_PRIVATE_URL_FETCHES = os.getenv("ALLOW_PRIVATE_URL_FETCHES", "false").lower() in {
     "1",
     "true",
@@ -142,13 +143,17 @@ def get_plan_credit_limit(plan_tier: str) -> dict[str, Any]:
 def get_credit_cost_for_model(model_slug: str) -> int:
     """Return weighted credit cost for a model based on its quality lane."""
 
-    quality_label = str(
-        SUPPORTED_MODELS.get(model_slug, {}).get("quality_label") or "cheap"
-    ).strip().lower()
+    quality_label = (
+        str(SUPPORTED_MODELS.get(model_slug, {}).get("quality_label") or "cheap")
+        .strip()
+        .lower()
+    )
     return MODEL_CREDIT_COSTS.get(quality_label, MODEL_CREDIT_COSTS["cheap"])
 
 
-def get_usage_period_start(period: str, reference: datetime | None = None) -> datetime | None:
+def get_usage_period_start(
+    period: str, reference: datetime | None = None
+) -> datetime | None:
     """Mirror frontend quota period logic for backend enforcement."""
 
     if period == "lifetime":
@@ -228,7 +233,9 @@ async def get_used_credits_for_period(
     }
 
 
-async def enforce_generation_quota(*, user_context: "UserContext | None", model: str, plan_tier: str) -> dict[str, Any]:
+async def enforce_generation_quota(
+    *, user_context: "UserContext | None", model: str, plan_tier: str
+) -> dict[str, Any]:
     """Reject requests that would exceed the user's weighted credit allowance."""
 
     if not user_context or not user_context.id:
@@ -254,7 +261,9 @@ async def enforce_generation_quota(*, user_context: "UserContext | None", model:
         }
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
-        logger.warning("quota_enforcement_skipped_missing_supabase_env user_id=%s", user_context.id)
+        logger.warning(
+            "quota_enforcement_skipped_missing_supabase_env user_id=%s", user_context.id
+        )
         return {
             "used": 0,
             "limit": quota.get("limit"),
@@ -834,7 +843,9 @@ async def supabase_delete(object_path: str) -> None:
         return
 
 
-def _supabase_rest_headers(*, include_json: bool = False, prefer: str | None = None) -> dict[str, str]:
+def _supabase_rest_headers(
+    *, include_json: bool = False, prefer: str | None = None
+) -> dict[str, str]:
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
         raise HTTPException(500, "Supabase env not set")
 
@@ -897,7 +908,9 @@ async def create_async_job(
         response = await client.post(endpoint, headers=headers, json=body)
 
     if response.status_code >= 400:
-        raise HTTPException(response.status_code, f"Supabase async job insert failed: {response.text}")
+        raise HTTPException(
+            response.status_code, f"Supabase async job insert failed: {response.text}"
+        )
 
     rows = response.json() or []
     if not rows:
@@ -917,7 +930,9 @@ async def get_async_job(job_id: str) -> dict[str, Any] | None:
         )
 
     if response.status_code >= 400:
-        raise HTTPException(response.status_code, f"Supabase async job lookup failed: {response.text}")
+        raise HTTPException(
+            response.status_code, f"Supabase async job lookup failed: {response.text}"
+        )
 
     rows = response.json() or []
     return rows[0] if rows else None
@@ -990,10 +1005,19 @@ async def create_or_get_async_job(
         raise
 
 
-async def list_async_jobs(*, status: str | None = None, user_id: str | None = None, limit: int = ASYNC_JOB_DEFAULT_LIMIT) -> list[dict[str, Any]]:
+async def list_async_jobs(
+    *,
+    status: str | None = None,
+    user_id: str | None = None,
+    limit: int = ASYNC_JOB_DEFAULT_LIMIT,
+) -> list[dict[str, Any]]:
     endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
     headers = _supabase_rest_headers()
-    params = {"select": "*", "order": "created_at.desc", "limit": min(max(limit, 1), 100)}
+    params = {
+        "select": "*",
+        "order": "created_at.desc",
+        "limit": min(max(limit, 1), 100),
+    }
     if status:
         params["status"] = f"eq.{status}"
     if user_id:
@@ -1003,12 +1027,25 @@ async def list_async_jobs(*, status: str | None = None, user_id: str | None = No
         response = await client.get(endpoint, headers=headers, params=params)
 
     if response.status_code >= 400:
-        raise HTTPException(response.status_code, f"Supabase async job list failed: {response.text}")
+        raise HTTPException(
+            response.status_code, f"Supabase async job list failed: {response.text}"
+        )
 
     return response.json() or []
 
 
-async def update_async_job(job_id: str, *, status: AsyncJobStatus, response_payload: dict[str, Any] | None = None, error_payload: dict[str, Any] | None = None, started_at: str | None = None, completed_at: str | None = None, locked_by: str | None = None, locked_at: str | None = None, attempts: int | None = None) -> dict[str, Any] | None:
+async def update_async_job(
+    job_id: str,
+    *,
+    status: AsyncJobStatus,
+    response_payload: dict[str, Any] | None = None,
+    error_payload: dict[str, Any] | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    locked_by: str | None = None,
+    locked_at: str | None = None,
+    attempts: int | None = None,
+) -> dict[str, Any] | None:
     endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
     headers = _supabase_rest_headers(include_json=True, prefer="return=representation")
     body: dict[str, Any] = {"status": status.value}
@@ -1028,10 +1065,14 @@ async def update_async_job(job_id: str, *, status: AsyncJobStatus, response_payl
         body["attempts"] = attempts
 
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.patch(endpoint, headers=headers, params={"id": f"eq.{job_id}"}, json=body)
+        response = await client.patch(
+            endpoint, headers=headers, params={"id": f"eq.{job_id}"}, json=body
+        )
 
     if response.status_code >= 400:
-        raise HTTPException(response.status_code, f"Supabase async job update failed: {response.text}")
+        raise HTTPException(
+            response.status_code, f"Supabase async job update failed: {response.text}"
+        )
 
     rows = response.json() or []
     return rows[0] if rows else None
@@ -1039,7 +1080,81 @@ async def update_async_job(job_id: str, *, status: AsyncJobStatus, response_payl
 
 async def claim_next_async_job(*, worker_id: str) -> dict[str, Any] | None:
     endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
-    headers = _supabase_rest_headers()
+    patch_headers = _supabase_rest_headers(
+        include_json=True, prefer="return=representation"
+    )
+    read_headers = _supabase_rest_headers()
+
+    async def _claim_row(
+        row: dict[str, Any],
+        *,
+        expected_status: AsyncJobStatus,
+        expected_locked_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        body = {
+            "status": AsyncJobStatus.processing.value,
+            "locked_by": worker_id,
+            "locked_at": now_iso,
+            "started_at": row.get("started_at") or now_iso,
+            "attempts": int(row.get("attempts") or 0) + 1,
+        }
+
+        patch_params = {
+            "id": f"eq.{row['id']}",
+            "status": f"eq.{expected_status.value}",
+        }
+        if expected_locked_at:
+            patch_params["locked_at"] = f"eq.{expected_locked_at}"
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            patch_response = await client.patch(
+                endpoint, headers=patch_headers, params=patch_params, json=body
+            )
+
+        if patch_response.status_code >= 400:
+            raise HTTPException(
+                patch_response.status_code,
+                f"Supabase async job claim failed: {patch_response.text}",
+            )
+
+        claimed = patch_response.json() or []
+        return claimed[0] if claimed else None
+
+    stale_before = (
+        datetime.now(timezone.utc) - timedelta(seconds=ASYNC_JOB_STALE_LOCK_SEC)
+    ).isoformat()
+    stale_params = {
+        "select": "*",
+        "status": f"eq.{AsyncJobStatus.processing.value}",
+        "locked_at": f"lt.{stale_before}",
+        "order": "locked_at.asc",
+        "limit": 20,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        stale_response = await client.get(
+            endpoint, headers=read_headers, params=stale_params
+        )
+    if stale_response.status_code >= 400:
+        raise HTTPException(
+            stale_response.status_code,
+            f"Supabase stale async job lookup failed: {stale_response.text}",
+        )
+
+    for row in stale_response.json() or []:
+        attempts = int(row.get("attempts") or 0)
+        max_attempts = int(row.get("max_attempts") or ASYNC_JOB_MAX_ATTEMPTS)
+        if attempts >= max_attempts:
+            continue
+        reclaimed = await _claim_row(
+            row,
+            expected_status=AsyncJobStatus.processing,
+            expected_locked_at=row.get("locked_at"),
+        )
+        if reclaimed:
+            return reclaimed
+
     params = {
         "select": "*",
         "status": f"eq.{AsyncJobStatus.queued.value}",
@@ -1048,38 +1163,20 @@ async def claim_next_async_job(*, worker_id: str) -> dict[str, Any] | None:
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
-        queued_response = await client.get(endpoint, headers=headers, params=params)
+        queued_response = await client.get(
+            endpoint, headers=read_headers, params=params
+        )
     if queued_response.status_code >= 400:
-        raise HTTPException(queued_response.status_code, f"Supabase async job claim lookup failed: {queued_response.text}")
+        raise HTTPException(
+            queued_response.status_code,
+            f"Supabase async job claim lookup failed: {queued_response.text}",
+        )
 
     rows = queued_response.json() or []
     if not rows:
         return None
 
-    row = rows[0]
-    now_iso = datetime.now(timezone.utc).isoformat()
-    patch_headers = _supabase_rest_headers(include_json=True, prefer="return=representation")
-    body = {
-        "status": AsyncJobStatus.processing.value,
-        "locked_by": worker_id,
-        "locked_at": now_iso,
-        "started_at": row.get("started_at") or now_iso,
-        "attempts": int(row.get("attempts") or 0) + 1,
-    }
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        patch_response = await client.patch(
-            endpoint,
-            headers=patch_headers,
-            params={"id": f"eq.{row['id']}", "status": f"eq.{AsyncJobStatus.queued.value}"},
-            json=body,
-        )
-
-    if patch_response.status_code >= 400:
-        raise HTTPException(patch_response.status_code, f"Supabase async job claim failed: {patch_response.text}")
-
-    claimed = patch_response.json() or []
-    return claimed[0] if claimed else None
+    return await _claim_row(rows[0], expected_status=AsyncJobStatus.queued)
 
 
 async def get_job_request(request_id: str) -> dict[str, Any] | None:
@@ -1333,7 +1430,9 @@ async def insert_pet_video(
         "resolution": resolution,
         "duration": duration,
         "model": model,
-        "credit_cost": credit_cost if credit_cost is not None else get_credit_cost_for_model(model),
+        "credit_cost": (
+            credit_cost if credit_cost is not None else get_credit_cost_for_model(model)
+        ),
         "plan_tier": plan_tier,
         "routing_quality": routing_quality,
         "created_at": created_at.isoformat(),
@@ -2249,7 +2348,9 @@ async def _resolve_job_model(
     return chosen, params, resolved, plan_tier
 
 
-def _unpack_resolved_job_model(result: tuple[Any, ...]) -> tuple[str, dict[str, Any], dict[str, Any], str]:
+def _unpack_resolved_job_model(
+    result: tuple[Any, ...],
+) -> tuple[str, dict[str, Any], dict[str, Any], str]:
     if len(result) == 4:
         model, input_params, resolved, plan_tier = result
         return model, input_params, resolved, plan_tier
@@ -2266,16 +2367,17 @@ async def process_prompt_only_request(req: JobPromptOnly) -> dict[str, Any]:
 
     model, input_params, resolved, plan_tier = _unpack_resolved_job_model(
         await _resolve_job_model(
-        seconds=req.seconds,
-        resolution=req.resolution,
-        quality=req.quality,
-        fps=req.fps,
-        has_audio=False,
-        user_context=req.user_context,
-        model=req.model,
-        model_override=req.model_override,
-        model_params=req.model_params,
-    ))
+            seconds=req.seconds,
+            resolution=req.resolution,
+            quality=req.quality,
+            fps=req.fps,
+            has_audio=False,
+            user_context=req.user_context,
+            model=req.model,
+            model_override=req.model_override,
+            model_params=req.model_params,
+        )
+    )
     prefix = resolve_user_storage_prefix(req.user_context)
 
     if normalized_request_id:
@@ -2402,16 +2504,17 @@ async def process_prompt_tts_request(req: JobPromptTTS) -> dict[str, Any]:
 
     model, input_params, resolved, plan_tier = _unpack_resolved_job_model(
         await _resolve_job_model(
-        seconds=req.seconds,
-        resolution=req.resolution,
-        quality=req.quality,
-        fps=req.fps,
-        has_audio=True,
-        user_context=req.user_context,
-        model=req.model,
-        model_override=req.model_override,
-        model_params=req.model_params,
-    ))
+            seconds=req.seconds,
+            resolution=req.resolution,
+            quality=req.quality,
+            fps=req.fps,
+            has_audio=True,
+            user_context=req.user_context,
+            model=req.model,
+            model_override=req.model_override,
+            model_params=req.model_params,
+        )
+    )
     prefix = resolve_user_storage_prefix(req.user_context)
 
     if normalized_request_id:
@@ -2581,7 +2684,9 @@ async def process_async_job_row(job_row: dict[str, Any]) -> dict[str, Any]:
     raise HTTPException(400, f"Unsupported async job kind '{kind}'.")
 
 
-async def run_async_worker_once(*, worker_id: str | None = None, limit: int = 1) -> list[dict[str, Any]]:
+async def run_async_worker_once(
+    *, worker_id: str | None = None, limit: int = 1
+) -> list[dict[str, Any]]:
     claimed_jobs: list[dict[str, Any]] = []
     worker_id = worker_id or f"worker-{uuid.uuid4()}"
 
@@ -2608,18 +2713,25 @@ async def run_async_worker_once(*, worker_id: str | None = None, limit: int = 1)
             await update_async_job(
                 job_row["id"],
                 status=AsyncJobStatus.failed,
-                error_payload={"message": str(exc.detail), "status_code": exc.status_code},
+                error_payload={
+                    "message": str(exc.detail),
+                    "status_code": exc.status_code,
+                },
                 completed_at=now_iso,
                 locked_by=worker_id,
                 locked_at=job_row.get("locked_at") or now_iso,
                 attempts=int(job_row.get("attempts") or 1),
             )
         except Exception as exc:
-            logger.exception("async_job_unexpected_failure job_id=%s", job_row.get("id"))
+            logger.exception(
+                "async_job_unexpected_failure job_id=%s", job_row.get("id")
+            )
             await update_async_job(
                 job_row["id"],
                 status=AsyncJobStatus.failed,
-                error_payload={"message": f"Unexpected server error: {type(exc).__name__}"},
+                error_payload={
+                    "message": f"Unexpected server error: {type(exc).__name__}"
+                },
                 completed_at=now_iso,
                 locked_by=worker_id,
                 locked_at=job_row.get("locked_at") or now_iso,
@@ -2644,9 +2756,7 @@ async def create_job_with_prompt_and_tts(
 
 
 @app.post("/async/jobs/prompt_only", status_code=202)
-async def enqueue_prompt_only_job(
-    req: JobPromptOnly, _: None = Depends(require_auth)
-):
+async def enqueue_prompt_only_job(req: JobPromptOnly, _: None = Depends(require_auth)):
     normalized_request_id = _normalize_request_id(req.request_id)
     if normalized_request_id:
         req.request_id = normalized_request_id
@@ -2668,9 +2778,7 @@ async def enqueue_prompt_only_job(
 
 
 @app.post("/async/jobs/prompt_tts", status_code=202)
-async def enqueue_prompt_tts_job(
-    req: JobPromptTTS, _: None = Depends(require_auth)
-):
+async def enqueue_prompt_tts_job(req: JobPromptTTS, _: None = Depends(require_auth)):
     normalized_request_id = _normalize_request_id(req.request_id)
     if normalized_request_id:
         req.request_id = normalized_request_id

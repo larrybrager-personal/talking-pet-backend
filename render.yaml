@@ -25,7 +25,7 @@ services:
     name: talking-pet-async-worker
     env: python
     buildCommand: "python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt"
-    startCommand: "python scripts/run_async_worker.py --limit 1"
+    startCommand: "PYTHONPATH=. python scripts/run_async_worker.py --limit 1"
     autoDeploy: true
     envVars:
       - key: ELEVEN_API_KEY

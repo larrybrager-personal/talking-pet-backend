@@ -20,7 +20,8 @@ import uuid
 from http import HTTPStatus
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
-from typing import Any, ClassVar, Tuple
+from enum import Enum
+from typing import Any, ClassVar, Literal, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -90,6 +91,9 @@ REPLICATE_POLL_TIMEOUT_SEC = float(os.getenv("REPLICATE_POLL_TIMEOUT_SEC", "900"
 FETCH_MAX_BYTES = int(os.getenv("FETCH_MAX_BYTES", "52428800"))
 DEBUG_FETCH_MAX_BYTES = int(os.getenv("DEBUG_FETCH_MAX_BYTES", "15728640"))
 MAX_REDIRECT_HOPS = int(os.getenv("MAX_REDIRECT_HOPS", "5"))
+ASYNC_JOB_POLL_INTERVAL_SEC = float(os.getenv("ASYNC_JOB_POLL_INTERVAL_SEC", "5"))
+ASYNC_JOB_MAX_ATTEMPTS = int(os.getenv("ASYNC_JOB_MAX_ATTEMPTS", "3"))
+ASYNC_JOB_DEFAULT_LIMIT = int(os.getenv("ASYNC_JOB_DEFAULT_LIMIT", "20"))
 ALLOW_PRIVATE_URL_FETCHES = os.getenv("ALLOW_PRIVATE_URL_FETCHES", "false").lower() in {
     "1",
     "true",
@@ -247,6 +251,18 @@ async def enforce_generation_quota(*, user_context: "UserContext | None", model:
             "period": None,
             "period_start": None,
             "required": required_credits,
+        }
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+        logger.warning("quota_enforcement_skipped_missing_supabase_env user_id=%s", user_context.id)
+        return {
+            "used": 0,
+            "limit": quota.get("limit"),
+            "remaining": quota.get("limit"),
+            "period": quota.get("period"),
+            "period_start": None,
+            "required": required_credits,
+            "skipped": True,
         }
 
     usage = await get_used_credits_for_period(
@@ -473,6 +489,52 @@ class JobPromptTTS(JobPromptOnly):
 
     text: str
     voice_id: str = Field(alias="voiceId")
+
+
+class AsyncJobStatus(str, Enum):
+    queued = "queued"
+    processing = "processing"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
+class AsyncJobKind(str, Enum):
+    prompt_only = "prompt_only"
+    prompt_tts = "prompt_tts"
+
+
+class AsyncJobEnqueueResponse(RequestModel):
+    job_id: str
+    status: AsyncJobStatus
+    kind: AsyncJobKind
+    request_id: str | None = None
+    status_url: str
+
+
+class AsyncJobResponse(RequestModel):
+    job_id: str
+    kind: AsyncJobKind
+    status: AsyncJobStatus
+    endpoint: str
+    request_id: str | None = None
+    user_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    attempts: int = 0
+    max_attempts: int = ASYNC_JOB_MAX_ATTEMPTS
+    response_payload: dict[str, Any] | None = None
+    error_payload: dict[str, Any] | None = None
+
+
+class AsyncJobListResponse(RequestModel):
+    jobs: list[AsyncJobResponse]
+
+
+class AsyncWorkerRunResponse(RequestModel):
+    processed: int
+    claimed_job_ids: list[str] = Field(default_factory=list)
 
 
 class HeadRequest(BaseModel):
@@ -770,6 +832,254 @@ async def supabase_delete(object_path: str) -> None:
     except httpx.HTTPError:
         # Cleanup should not mask the originating exception.
         return
+
+
+def _supabase_rest_headers(*, include_json: bool = False, prefer: str | None = None) -> dict[str, str]:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE:
+        raise HTTPException(500, "Supabase env not set")
+
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE}",
+        "apikey": SUPABASE_SERVICE_ROLE,
+    }
+    if include_json:
+        headers["Content-Type"] = "application/json"
+    if prefer:
+        headers["Prefer"] = prefer
+    return headers
+
+
+def _build_async_job_status_url(job_id: str) -> str:
+    return f"/async/jobs/{job_id}"
+
+
+def _serialize_async_job(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "job_id": row.get("id"),
+        "kind": row.get("kind"),
+        "status": row.get("status"),
+        "endpoint": row.get("endpoint"),
+        "request_id": row.get("request_id"),
+        "user_id": row.get("user_id"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "started_at": row.get("started_at"),
+        "completed_at": row.get("completed_at"),
+        "attempts": row.get("attempts") or 0,
+        "max_attempts": row.get("max_attempts") or ASYNC_JOB_MAX_ATTEMPTS,
+        "response_payload": row.get("response_payload"),
+        "error_payload": row.get("error_payload"),
+    }
+
+
+async def create_async_job(
+    *,
+    kind: AsyncJobKind,
+    endpoint_name: str,
+    payload: dict[str, Any],
+    user_id: str | None,
+    request_id: str | None,
+) -> dict[str, Any]:
+    endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
+    headers = _supabase_rest_headers(include_json=True, prefer="return=representation")
+    body = {
+        "kind": kind.value,
+        "endpoint": endpoint_name,
+        "status": AsyncJobStatus.queued.value,
+        "request_payload": payload,
+        "user_id": user_id,
+        "request_id": request_id,
+        "attempts": 0,
+        "max_attempts": ASYNC_JOB_MAX_ATTEMPTS,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(endpoint, headers=headers, json=body)
+
+    if response.status_code >= 400:
+        raise HTTPException(response.status_code, f"Supabase async job insert failed: {response.text}")
+
+    rows = response.json() or []
+    if not rows:
+        raise HTTPException(500, "Supabase async job insert returned no rows")
+    return rows[0]
+
+
+async def get_async_job(job_id: str) -> dict[str, Any] | None:
+    endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
+    headers = _supabase_rest_headers()
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            endpoint,
+            headers=headers,
+            params={"id": f"eq.{job_id}", "select": "*", "limit": 1},
+        )
+
+    if response.status_code >= 400:
+        raise HTTPException(response.status_code, f"Supabase async job lookup failed: {response.text}")
+
+    rows = response.json() or []
+    return rows[0] if rows else None
+
+
+async def get_async_job_by_request_id(
+    *, request_id: str, endpoint_name: str, user_id: str | None
+) -> dict[str, Any] | None:
+    endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
+    headers = _supabase_rest_headers()
+    params = {
+        "request_id": f"eq.{request_id}",
+        "endpoint": f"eq.{endpoint_name}",
+        "select": "*",
+        "order": "created_at.desc",
+        "limit": 1,
+    }
+    if user_id is None:
+        params["user_id"] = "is.null"
+    else:
+        params["user_id"] = f"eq.{user_id}"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(endpoint, headers=headers, params=params)
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            response.status_code,
+            f"Supabase async job request lookup failed: {response.text}",
+        )
+
+    rows = response.json() or []
+    return rows[0] if rows else None
+
+
+async def create_or_get_async_job(
+    *,
+    kind: AsyncJobKind,
+    endpoint_name: str,
+    payload: dict[str, Any],
+    user_id: str | None,
+    request_id: str | None,
+) -> dict[str, Any]:
+    if request_id:
+        existing = await get_async_job_by_request_id(
+            request_id=request_id,
+            endpoint_name=endpoint_name,
+            user_id=user_id,
+        )
+        if existing:
+            return existing
+    try:
+        return await create_async_job(
+            kind=kind,
+            endpoint_name=endpoint_name,
+            payload=payload,
+            user_id=user_id,
+            request_id=request_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 409 or not request_id:
+            raise
+        existing = await get_async_job_by_request_id(
+            request_id=request_id,
+            endpoint_name=endpoint_name,
+            user_id=user_id,
+        )
+        if existing:
+            return existing
+        raise
+
+
+async def list_async_jobs(*, status: str | None = None, user_id: str | None = None, limit: int = ASYNC_JOB_DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
+    headers = _supabase_rest_headers()
+    params = {"select": "*", "order": "created_at.desc", "limit": min(max(limit, 1), 100)}
+    if status:
+        params["status"] = f"eq.{status}"
+    if user_id:
+        params["user_id"] = f"eq.{user_id}"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(endpoint, headers=headers, params=params)
+
+    if response.status_code >= 400:
+        raise HTTPException(response.status_code, f"Supabase async job list failed: {response.text}")
+
+    return response.json() or []
+
+
+async def update_async_job(job_id: str, *, status: AsyncJobStatus, response_payload: dict[str, Any] | None = None, error_payload: dict[str, Any] | None = None, started_at: str | None = None, completed_at: str | None = None, locked_by: str | None = None, locked_at: str | None = None, attempts: int | None = None) -> dict[str, Any] | None:
+    endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
+    headers = _supabase_rest_headers(include_json=True, prefer="return=representation")
+    body: dict[str, Any] = {"status": status.value}
+    if response_payload is not None:
+        body["response_payload"] = response_payload
+    if error_payload is not None:
+        body["error_payload"] = error_payload
+    if started_at is not None:
+        body["started_at"] = started_at
+    if completed_at is not None:
+        body["completed_at"] = completed_at
+    if locked_by is not None:
+        body["locked_by"] = locked_by
+    if locked_at is not None:
+        body["locked_at"] = locked_at
+    if attempts is not None:
+        body["attempts"] = attempts
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.patch(endpoint, headers=headers, params={"id": f"eq.{job_id}"}, json=body)
+
+    if response.status_code >= 400:
+        raise HTTPException(response.status_code, f"Supabase async job update failed: {response.text}")
+
+    rows = response.json() or []
+    return rows[0] if rows else None
+
+
+async def claim_next_async_job(*, worker_id: str) -> dict[str, Any] | None:
+    endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
+    headers = _supabase_rest_headers()
+    params = {
+        "select": "*",
+        "status": f"eq.{AsyncJobStatus.queued.value}",
+        "order": "created_at.asc",
+        "limit": 1,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        queued_response = await client.get(endpoint, headers=headers, params=params)
+    if queued_response.status_code >= 400:
+        raise HTTPException(queued_response.status_code, f"Supabase async job claim lookup failed: {queued_response.text}")
+
+    rows = queued_response.json() or []
+    if not rows:
+        return None
+
+    row = rows[0]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    patch_headers = _supabase_rest_headers(include_json=True, prefer="return=representation")
+    body = {
+        "status": AsyncJobStatus.processing.value,
+        "locked_by": worker_id,
+        "locked_at": now_iso,
+        "started_at": row.get("started_at") or now_iso,
+        "attempts": int(row.get("attempts") or 0) + 1,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        patch_response = await client.patch(
+            endpoint,
+            headers=patch_headers,
+            params={"id": f"eq.{row['id']}", "status": f"eq.{AsyncJobStatus.queued.value}"},
+            json=body,
+        )
+
+    if patch_response.status_code >= 400:
+        raise HTTPException(patch_response.status_code, f"Supabase async job claim failed: {patch_response.text}")
+
+    claimed = patch_response.json() or []
+    return claimed[0] if claimed else None
 
 
 async def get_job_request(request_id: str) -> dict[str, Any] | None:
@@ -1939,14 +2249,23 @@ async def _resolve_job_model(
     return chosen, params, resolved, plan_tier
 
 
-@app.post("/jobs_prompt_only")
-async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_auth)):
-    """Generate a video from a static image and text prompt."""
+def _unpack_resolved_job_model(result: tuple[Any, ...]) -> tuple[str, dict[str, Any], dict[str, Any], str]:
+    if len(result) == 4:
+        model, input_params, resolved, plan_tier = result
+        return model, input_params, resolved, plan_tier
+    if len(result) == 3:
+        model, input_params, resolved = result
+        return model, input_params, resolved, "free"
+    raise ValueError("Unexpected _resolve_job_model return shape")
+
+
+async def process_prompt_only_request(req: JobPromptOnly) -> dict[str, Any]:
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
     _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
-    model, input_params, resolved, plan_tier = await _resolve_job_model(
+    model, input_params, resolved, plan_tier = _unpack_resolved_job_model(
+        await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
         quality=req.quality,
@@ -1956,7 +2275,7 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         model=req.model,
         model_override=req.model_override,
         model_params=req.model_params,
-    )
+    ))
     prefix = resolve_user_storage_prefix(req.user_context)
 
     if normalized_request_id:
@@ -2042,8 +2361,6 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         response_payload = {
             "video_url": video_url,
             "final_url": final_url,
-            "credit_cost": quota_usage["required"],
-            "plan_tier": plan_tier,
         }
         if normalized_request_id:
             await update_job_request_best_effort(
@@ -2078,16 +2395,13 @@ async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_a
         raise exc
 
 
-@app.post("/jobs_prompt_tts")
-async def create_job_with_prompt_and_tts(
-    req: JobPromptTTS, _: None = Depends(require_auth)
-):
-    """Generate a video with synchronized speech."""
+async def process_prompt_tts_request(req: JobPromptTTS) -> dict[str, Any]:
     normalized_request_id = _normalize_request_id(req.request_id)
     user_id = req.user_context.id if req.user_context else None
     _validate_outbound_url(req.image_url, allow_private=ALLOW_PRIVATE_URL_FETCHES)
 
-    model, input_params, resolved, plan_tier = await _resolve_job_model(
+    model, input_params, resolved, plan_tier = _unpack_resolved_job_model(
+        await _resolve_job_model(
         seconds=req.seconds,
         resolution=req.resolution,
         quality=req.quality,
@@ -2097,7 +2411,7 @@ async def create_job_with_prompt_and_tts(
         model=req.model,
         model_override=req.model_override,
         model_params=req.model_params,
-    )
+    ))
     prefix = resolve_user_storage_prefix(req.user_context)
 
     if normalized_request_id:
@@ -2208,8 +2522,6 @@ async def create_job_with_prompt_and_tts(
             "audio_url": audio_public_url,
             "video_url": video_url,
             "final_url": final_url,
-            "credit_cost": quota_usage["required"],
-            "plan_tier": plan_tier,
         }
         if normalized_request_id:
             await update_job_request_best_effort(
@@ -2251,6 +2563,164 @@ async def create_job_with_prompt_and_tts(
                 error="Unexpected server error while processing this request_id.",
             )
         raise
+
+
+async def process_async_job_row(job_row: dict[str, Any]) -> dict[str, Any]:
+    payload = job_row.get("request_payload")
+    if not isinstance(payload, dict):
+        raise HTTPException(500, "Async job request_payload is missing or invalid.")
+
+    worker_payload = dict(payload)
+    worker_payload["request_id"] = None
+
+    kind = job_row.get("kind")
+    if kind == AsyncJobKind.prompt_only.value:
+        return await process_prompt_only_request(JobPromptOnly(**worker_payload))
+    if kind == AsyncJobKind.prompt_tts.value:
+        return await process_prompt_tts_request(JobPromptTTS(**worker_payload))
+    raise HTTPException(400, f"Unsupported async job kind '{kind}'.")
+
+
+async def run_async_worker_once(*, worker_id: str | None = None, limit: int = 1) -> list[dict[str, Any]]:
+    claimed_jobs: list[dict[str, Any]] = []
+    worker_id = worker_id or f"worker-{uuid.uuid4()}"
+
+    for _ in range(max(1, limit)):
+        job_row = await claim_next_async_job(worker_id=worker_id)
+        if not job_row:
+            break
+        claimed_jobs.append(job_row)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            response_payload = await process_async_job_row(job_row)
+            await update_async_job(
+                job_row["id"],
+                status=AsyncJobStatus.succeeded,
+                response_payload=response_payload,
+                error_payload=None,
+                completed_at=now_iso,
+                locked_by=worker_id,
+                locked_at=job_row.get("locked_at") or now_iso,
+                attempts=int(job_row.get("attempts") or 1),
+            )
+        except HTTPException as exc:
+            await update_async_job(
+                job_row["id"],
+                status=AsyncJobStatus.failed,
+                error_payload={"message": str(exc.detail), "status_code": exc.status_code},
+                completed_at=now_iso,
+                locked_by=worker_id,
+                locked_at=job_row.get("locked_at") or now_iso,
+                attempts=int(job_row.get("attempts") or 1),
+            )
+        except Exception as exc:
+            logger.exception("async_job_unexpected_failure job_id=%s", job_row.get("id"))
+            await update_async_job(
+                job_row["id"],
+                status=AsyncJobStatus.failed,
+                error_payload={"message": f"Unexpected server error: {type(exc).__name__}"},
+                completed_at=now_iso,
+                locked_by=worker_id,
+                locked_at=job_row.get("locked_at") or now_iso,
+                attempts=int(job_row.get("attempts") or 1),
+            )
+
+    return claimed_jobs
+
+
+@app.post("/jobs_prompt_only")
+async def create_job_with_prompt(req: JobPromptOnly, _: None = Depends(require_auth)):
+    """Generate a video from a static image and text prompt."""
+    return await process_prompt_only_request(req)
+
+
+@app.post("/jobs_prompt_tts")
+async def create_job_with_prompt_and_tts(
+    req: JobPromptTTS, _: None = Depends(require_auth)
+):
+    """Generate a video with synchronized speech."""
+    return await process_prompt_tts_request(req)
+
+
+@app.post("/async/jobs/prompt_only", status_code=202)
+async def enqueue_prompt_only_job(
+    req: JobPromptOnly, _: None = Depends(require_auth)
+):
+    normalized_request_id = _normalize_request_id(req.request_id)
+    if normalized_request_id:
+        req.request_id = normalized_request_id
+    user_id = req.user_context.id if req.user_context else None
+    row = await create_or_get_async_job(
+        kind=AsyncJobKind.prompt_only,
+        endpoint_name="/jobs_prompt_only",
+        payload=to_model_dict(req),
+        user_id=user_id,
+        request_id=normalized_request_id,
+    )
+    return {
+        "job_id": row["id"],
+        "status": row["status"],
+        "kind": row["kind"],
+        "request_id": row.get("request_id"),
+        "status_url": _build_async_job_status_url(row["id"]),
+    }
+
+
+@app.post("/async/jobs/prompt_tts", status_code=202)
+async def enqueue_prompt_tts_job(
+    req: JobPromptTTS, _: None = Depends(require_auth)
+):
+    normalized_request_id = _normalize_request_id(req.request_id)
+    if normalized_request_id:
+        req.request_id = normalized_request_id
+    user_id = req.user_context.id if req.user_context else None
+    row = await create_or_get_async_job(
+        kind=AsyncJobKind.prompt_tts,
+        endpoint_name="/jobs_prompt_tts",
+        payload=to_model_dict(req),
+        user_id=user_id,
+        request_id=normalized_request_id,
+    )
+    return {
+        "job_id": row["id"],
+        "status": row["status"],
+        "kind": row["kind"],
+        "request_id": row.get("request_id"),
+        "status_url": _build_async_job_status_url(row["id"]),
+    }
+
+
+@app.get("/async/jobs/{job_id}")
+async def get_async_job_status(job_id: str, _: None = Depends(require_auth)):
+    row = await get_async_job(job_id)
+    if not row:
+        raise HTTPException(404, "Async job not found")
+    return _serialize_async_job(row)
+
+
+@app.get("/async/jobs")
+async def list_async_job_statuses(
+    status: Literal["queued", "processing", "succeeded", "failed"] | None = None,
+    user_id: str | None = None,
+    limit: int = ASYNC_JOB_DEFAULT_LIMIT,
+    _: None = Depends(require_auth),
+):
+    rows = await list_async_jobs(status=status, user_id=user_id, limit=limit)
+    return {"jobs": [_serialize_async_job(row) for row in rows]}
+
+
+@app.post("/async/worker/run_once")
+async def trigger_async_worker_run_once(
+    limit: int = 1,
+    worker_id: str | None = None,
+    _: None = Depends(require_auth),
+):
+    claimed_jobs = await run_async_worker_once(worker_id=worker_id, limit=limit)
+    return {
+        "processed": len(claimed_jobs),
+        "claimed_job_ids": [row["id"] for row in claimed_jobs],
+    }
 
 
 # ===== Debug =====

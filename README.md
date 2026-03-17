@@ -180,6 +180,65 @@ Response:
 }
 ```
 
+### Async queue endpoints (Phase 2)
+Use these when the frontend should enqueue work and poll instead of holding the HTTP connection open.
+
+Canonical async contract for frontend polling:
+
+- Table/source of truth: `public.async_jobs`
+- Enqueue APIs: `POST /async/jobs/prompt_only`, `POST /async/jobs/prompt_tts`
+- Poll APIs: `GET /async/jobs/{job_id}`, optional `GET /async/jobs?status=...&user_id=...&limit=...`
+- Worker helper: `POST /async/worker/run_once?limit=1`
+- Status lifecycle: `queued` → `processing` → `succeeded` | `failed`
+- Result fields: success populates `response_payload`; failure populates `error_payload`
+- `request_id` on async endpoints is an optional enqueue idempotency key scoped to `(endpoint, user_id)`; when reused, the backend returns the existing async job instead of creating a second one
+- The worker clears `request_id` before invoking the legacy synchronous handlers so async state stays canonical in `async_jobs` rather than splitting across `job_requests`
+
+Endpoints:
+- `POST /async/jobs/prompt_only` → enqueue a prompt-only generation and return `202 Accepted`
+- `POST /async/jobs/prompt_tts` → enqueue a TTS-backed generation and return `202 Accepted`
+- `GET /async/jobs/{job_id}` → fetch job status/result/error payload
+- `GET /async/jobs?status=queued&user_id=<uuid>&limit=20` → list recent jobs
+- `POST /async/worker/run_once?limit=1` → helper endpoint to process one worker batch (useful for admin/manual runs)
+
+Enqueue response shape:
+```json
+{
+  "job_id": "uuid",
+  "status": "queued",
+  "kind": "prompt_tts",
+  "request_id": "optional-idempotency-uuid",
+  "status_url": "/async/jobs/uuid"
+}
+```
+
+Job status response shape:
+```json
+{
+  "job_id": "uuid",
+  "kind": "prompt_tts",
+  "status": "processing",
+  "endpoint": "/jobs_prompt_tts",
+  "request_id": "optional-idempotency-uuid",
+  "user_id": "optional-user-uuid",
+  "attempts": 1,
+  "max_attempts": 3,
+  "created_at": "2026-03-16T22:00:00+00:00",
+  "updated_at": "2026-03-16T22:00:05+00:00",
+  "started_at": "2026-03-16T22:00:05+00:00",
+  "completed_at": null,
+  "response_payload": null,
+  "error_payload": null
+}
+```
+
+Worker process:
+```bash
+python3 scripts/run_async_worker.py --limit 1
+# or keep polling
+python3 scripts/run_async_worker.py --limit 1 --poll-interval 5
+```
+
 ### `POST /jobs_prompt_tts`
 Request (snake_case example):
 ```json
@@ -402,7 +461,10 @@ pytest -q
 
 ## Request id idempotency
 
-`/jobs_prompt_only` and `/jobs_prompt_tts` support optional request idempotency with `request_id` (UUID).
+There are now two request-id contracts, and the frontend should treat them differently:
+
+### Synchronous endpoints
+`/jobs_prompt_only` and `/jobs_prompt_tts` still support optional request idempotency with `request_id` (UUID).
 
 - No `request_id`: endpoint behaves as before (new run is started).
 - Existing `request_id` with `succeeded`: returns the stored response immediately (no new Replicate/ElevenLabs call).
@@ -410,6 +472,14 @@ pytest -q
 - Existing `request_id` with `failed`: returns HTTP 409 with the stored deterministic error and does not rerun.
 - Invalid `request_id`: backend ignores idempotency and processes normally.
 
-Backed by Supabase table `public.job_requests`; see migration SQL: `migrations/20260227_create_job_requests.sql`.
+This synchronous contract is backed by Supabase table `public.job_requests`; see migration SQL: `migrations/20260227_create_job_requests.sql`.
+
+### Asynchronous endpoints
+`/async/jobs/prompt_only` and `/async/jobs/prompt_tts` use `public.async_jobs` as the canonical record.
+
+- No `request_id`: creates a new async job row.
+- Existing `request_id` for the same `(endpoint, user_id)` scope: returns the existing async job row and its `job_id`/status instead of creating a duplicate enqueue.
+- Frontend polling/result/error state should come only from `GET /async/jobs/{job_id}` or `GET /async/jobs...`.
+- The async worker does not reuse `job_requests` for async polling state.
 
 Canonical URL migration for metadata rows: `migrations/20260314_pet_videos_canonical_final_url.sql` adds/backfills `final_url` and `provider_video_url` for durable frontend playback/history references.

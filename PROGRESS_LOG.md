@@ -123,3 +123,9 @@
 ## 2026-03-14
 - Hardened migration `20260314_pet_videos_canonical_final_url.sql` for fresh/ephemeral databases by wrapping `pet_videos` backfill updates and index creation in a `to_regclass('public.pet_videos')` guard inside a DO block.
 - Preserved forward-only idempotency so canonical column adds still use `alter table if exists ... add column if not exists` while skipping unsafe statements when the table is absent.
+
+## 2026-03-16
+- Fixed migration ordering safety for async job idempotency index creation by wrapping `20260316_async_jobs_request_id_scope.sql` in a `to_regclass('public.async_jobs')` guard, preventing failures on fresh environments where the table is created by a later migration file.
+- Added the same `idx_async_jobs_request_scope_unique` index creation to `20260316_create_async_jobs.sql` so new databases always end with the intended uniqueness constraint even if the guard migration runs first.
+- Preserved forward-only/idempotent behavior with `create ... if not exists` and no schema contract changes to existing endpoints.
+

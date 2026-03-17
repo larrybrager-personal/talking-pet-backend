@@ -32,6 +32,11 @@ create index if not exists idx_async_jobs_user_created_at
 create index if not exists idx_async_jobs_request_id
   on public.async_jobs (request_id);
 
+
+create unique index if not exists idx_async_jobs_request_scope_unique
+  on public.async_jobs (request_id, endpoint, coalesce(user_id, '00000000-0000-0000-0000-000000000000'::uuid))
+  where request_id is not null;
+
 create or replace function public.set_async_jobs_updated_at()
 returns trigger
 language plpgsql

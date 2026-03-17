@@ -21,3 +21,4 @@
 
 - Add endpoint-level tests for `/jobs_prompt_tts` failed-idempotency branch to verify deterministic 409 response and no rerun on stored failures.
 - Consider adding stale `processing` recovery (heartbeat/lease ownership) for crashed owner requests so duplicates can eventually fail fast with clearer remediation.
+- Consider enforcing deterministic migration ordering (e.g., timestamp + sequence suffix or explicit sort step in migration runner) to avoid same-day filename collisions causing dependency inversions.

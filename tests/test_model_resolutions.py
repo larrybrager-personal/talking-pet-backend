@@ -138,6 +138,19 @@ class BuildModelPayloadResolutionTestCase(unittest.TestCase):
         self.assertEqual(payload["input"]["num_frames"], 121)
         self.assertNotIn("fps", payload["input"])
 
+    def test_wan22_a14b_num_frames_are_capped_to_provider_limit(self):
+        payload = main.build_model_payload(
+            "wan-video/wan-2.2-i2v-a14b",
+            image_url="https://example.com/image.jpg",
+            prompt="hello",
+            seconds=10,
+            resolution="1080p",
+            fps=24,
+        )
+
+        self.assertEqual(payload["input"]["frames_per_second"], 24)
+        self.assertEqual(payload["input"]["num_frames"], 100)
+
 
 class ModelNormalizationTestCase(unittest.TestCase):
     def test_legacy_slugs_are_normalized(self):

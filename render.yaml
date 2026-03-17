@@ -20,3 +20,27 @@ services:
         sync: false
       - key: SUPABASE_BUCKET
         value: pets     # or your bucket name
+
+  - type: worker
+    name: talking-pet-async-worker
+    env: python
+    buildCommand: "python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt"
+    startCommand: "python scripts/run_async_worker.py --limit 1"
+    autoDeploy: true
+    envVars:
+      - key: ELEVEN_API_KEY
+        sync: false
+      - key: DID_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: pets
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: API_AUTH_ENABLED
+        value: "true"
+      - key: API_AUTH_TOKEN
+        sync: false

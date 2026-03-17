@@ -95,6 +95,8 @@ ASYNC_JOB_POLL_INTERVAL_SEC = float(os.getenv("ASYNC_JOB_POLL_INTERVAL_SEC", "5"
 ASYNC_JOB_MAX_ATTEMPTS = int(os.getenv("ASYNC_JOB_MAX_ATTEMPTS", "3"))
 ASYNC_JOB_DEFAULT_LIMIT = int(os.getenv("ASYNC_JOB_DEFAULT_LIMIT", "20"))
 ASYNC_JOB_STALE_LOCK_SEC = float(os.getenv("ASYNC_JOB_STALE_LOCK_SEC", "300"))
+ASYNC_JOB_MAX_QUEUED_AGE_SEC = float(os.getenv("ASYNC_JOB_MAX_QUEUED_AGE_SEC", "900"))
+ASYNC_JOB_MAX_PROCESSING_AGE_SEC = float(os.getenv("ASYNC_JOB_MAX_PROCESSING_AGE_SEC", "1800"))
 ALLOW_PRIVATE_URL_FETCHES = os.getenv("ALLOW_PRIVATE_URL_FETCHES", "false").lower() in {
     "1",
     "true",
@@ -1078,7 +1080,79 @@ async def update_async_job(
     return rows[0] if rows else None
 
 
+def _parse_iso8601(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+async def fail_expired_async_jobs() -> int:
+    now = datetime.now(timezone.utc)
+    rows = await list_async_jobs(limit=100)
+    expired = 0
+
+    for row in rows:
+        status = row.get("status")
+        if status not in {
+            AsyncJobStatus.queued.value,
+            AsyncJobStatus.processing.value,
+        }:
+            continue
+
+        created_at = _parse_iso8601(row.get("created_at"))
+        started_at = _parse_iso8601(row.get("started_at"))
+        locked_at = _parse_iso8601(row.get("locked_at"))
+
+        timeout_reason: str | None = None
+        timeout_seconds: int | None = None
+
+        if status == AsyncJobStatus.queued.value and created_at is not None:
+            queued_age = (now - created_at).total_seconds()
+            if queued_age > ASYNC_JOB_MAX_QUEUED_AGE_SEC:
+                timeout_reason = "queued_timeout"
+                timeout_seconds = int(ASYNC_JOB_MAX_QUEUED_AGE_SEC)
+        elif status == AsyncJobStatus.processing.value:
+            processing_since = started_at or locked_at or created_at
+            if processing_since is not None:
+                processing_age = (now - processing_since).total_seconds()
+                if processing_age > ASYNC_JOB_MAX_PROCESSING_AGE_SEC:
+                    timeout_reason = "processing_timeout"
+                    timeout_seconds = int(ASYNC_JOB_MAX_PROCESSING_AGE_SEC)
+
+        if not timeout_reason:
+            continue
+
+        logger.warning(
+            "async_job_timed_out job_id=%s status=%s reason=%s",
+            row.get("id"),
+            status,
+            timeout_reason,
+        )
+        await update_async_job(
+            str(row["id"]),
+            status=AsyncJobStatus.failed,
+            error_payload={
+                "message": "Render timed out before completion. Please try again.",
+                "reason": timeout_reason,
+                "timeout_seconds": timeout_seconds,
+                "retryable": True,
+            },
+            completed_at=now.isoformat(),
+            locked_by=row.get("locked_by"),
+            locked_at=row.get("locked_at"),
+            attempts=int(row.get("attempts") or 0),
+        )
+        expired += 1
+
+    return expired
+
+
 async def claim_next_async_job(*, worker_id: str) -> dict[str, Any] | None:
+    await fail_expired_async_jobs()
+
     endpoint = f"{SUPABASE_URL}/rest/v1/async_jobs"
     patch_headers = _supabase_rest_headers(
         include_json=True, prefer="return=representation"

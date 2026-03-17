@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import main
@@ -95,6 +96,65 @@ class AsyncJobHelpersTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(row, existing)
         mock_create.assert_not_awaited()
+
+
+class AsyncJobTimeoutBehaviorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fail_expired_async_jobs_marks_old_queued_job_failed(self):
+        old_job = {
+            "id": "job-queued-old",
+            "status": "queued",
+            "created_at": "2026-03-16T00:00:00+00:00",
+            "attempts": 0,
+        }
+
+        with (
+            patch("main.ASYNC_JOB_MAX_QUEUED_AGE_SEC", 60),
+            patch("main.list_async_jobs", new_callable=AsyncMock) as mock_list,
+            patch("main.update_async_job", new_callable=AsyncMock) as mock_update,
+            patch("main.datetime") as mock_datetime,
+        ):
+            mock_list.return_value = [old_job]
+            mock_datetime.now.return_value = datetime(2026, 3, 16, 0, 2, 0, tzinfo=timezone.utc)
+            mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+
+            expired = await main.fail_expired_async_jobs()
+
+        self.assertEqual(expired, 1)
+        mock_update.assert_awaited_once()
+        update_kwargs = mock_update.await_args.kwargs
+        self.assertEqual(update_kwargs["status"], main.AsyncJobStatus.failed)
+        self.assertEqual(update_kwargs["error_payload"]["reason"], "queued_timeout")
+        self.assertTrue(update_kwargs["error_payload"]["retryable"])
+
+    async def test_fail_expired_async_jobs_marks_old_processing_job_failed(self):
+        old_job = {
+            "id": "job-processing-old",
+            "status": "processing",
+            "created_at": "2026-03-16T00:00:00+00:00",
+            "started_at": "2026-03-16T00:01:00+00:00",
+            "locked_at": "2026-03-16T00:01:00+00:00",
+            "attempts": 1,
+            "locked_by": "worker-1",
+        }
+
+        with (
+            patch("main.ASYNC_JOB_MAX_PROCESSING_AGE_SEC", 60),
+            patch("main.list_async_jobs", new_callable=AsyncMock) as mock_list,
+            patch("main.update_async_job", new_callable=AsyncMock) as mock_update,
+            patch("main.datetime") as mock_datetime,
+        ):
+            mock_list.return_value = [old_job]
+            mock_datetime.now.return_value = datetime(2026, 3, 16, 0, 3, 0, tzinfo=timezone.utc)
+            mock_datetime.fromisoformat.side_effect = datetime.fromisoformat
+
+            expired = await main.fail_expired_async_jobs()
+
+        self.assertEqual(expired, 1)
+        mock_update.assert_awaited_once()
+        update_kwargs = mock_update.await_args.kwargs
+        self.assertEqual(update_kwargs["status"], main.AsyncJobStatus.failed)
+        self.assertEqual(update_kwargs["error_payload"]["reason"], "processing_timeout")
+        self.assertEqual(update_kwargs["attempts"], 1)
 
 
 class AsyncWorkerBehaviorTest(unittest.IsolatedAsyncioTestCase):

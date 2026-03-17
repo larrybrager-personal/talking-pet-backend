@@ -426,7 +426,7 @@ SUPPORTED_MODELS = {
         "supported_resolutions": ["720p", "1080p"],
         "supported_durations": [5, 10],
         "supported_fps": [16, 24],
-        "frame_count_range": {"min": 81, "max": 121},
+        "frame_count_range": {"min": 81, "max": 100},
         "tunable_params": [
             {
                 "key": "fps",

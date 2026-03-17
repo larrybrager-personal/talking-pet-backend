@@ -1,0 +1,86 @@
+name: DB Migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Label for the target environment"
+        required: true
+        default: production
+        type: string
+      migrations_dir:
+        description: "Directory containing SQL migrations"
+        required: true
+        default: migrations
+        type: string
+      dry_run:
+        description: "List/apply checks without executing SQL"
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - 'migrations/*.sql'
+      - 'scripts/apply_migrations.sh'
+      - 'scripts/verify_expected_schema.sh'
+      - '.github/workflows/db-migrations.yml'
+  release:
+    types:
+      - published
+
+jobs:
+  migrate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        vars.ENABLE_AUTO_DB_MIGRATIONS == 'true' &&
+        github.event_name == 'push'
+      ) ||
+      (
+        vars.ENABLE_AUTO_DB_MIGRATIONS == 'true' &&
+        github.event_name == 'release' &&
+        github.event.release.target_commitish == 'main'
+      )
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.target_env || 'production' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: db-migrations-${{ github.repository }}-${{ github.event_name == 'workflow_dispatch' && inputs.target_env || 'production' }}
+      cancel-in-progress: false
+    env:
+      DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.target_env || 'production' }}
+      MIGRATIONS_DIR: ${{ github.event_name == 'workflow_dispatch' && inputs.migrations_dir || 'migrations' }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Validate migration database secret
+        run: |
+          set -euo pipefail
+          if [[ -z "$DATABASE_URL" ]]; then
+            echo "MIGRATION_DATABASE_URL secret is required." >&2
+            exit 1
+          fi
+
+      - name: Show migration plan
+        run: |
+          set -euo pipefail
+          echo "Event: ${{ github.event_name }}"
+          echo "Target env: $TARGET_ENV"
+          echo "Migrations dir: $MIGRATIONS_DIR"
+          ls -1 "$MIGRATIONS_DIR"
+
+      - name: Apply migrations
+        run: bash scripts/apply_migrations.sh
+
+      - name: Verify expected backend schema
+        if: ${{ env.DRY_RUN != 'true' }}
+        run: bash scripts/verify_expected_schema.sh
